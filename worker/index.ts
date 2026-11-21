@@ -773,7 +773,7 @@ async function runCampaignDelivery(env:Env){
   else recipients=await env.DB.prepare("SELECT telegram_id FROM users WHERE status='active' LIMIT 1000").all();
   let sent=0,failed=0;
   for(const user of recipients.results||[]){
-   const message=[campaign.title,campaign.description].filter(Boolean).join("\\n\\n");
+   const message=[campaign.title,campaign.description].filter(Boolean).join("\n\n");
    const keyboard=payload.button_text&&payload.button_url?{inline_keyboard:[[{text:String(payload.button_text).slice(0,40),url:String(payload.button_url)}]]}:undefined;
    const method=payload.image_url?"sendPhoto":"sendMessage";
    const params:any=payload.image_url?{chat_id:user.telegram_id,photo:payload.image_url,caption:message,reply_markup:keyboard}:{chat_id:user.telegram_id,text:message,reply_markup:keyboard,disable_web_page_preview:true};
