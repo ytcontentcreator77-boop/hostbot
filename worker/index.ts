@@ -95,6 +95,65 @@ app.post("/api/agent/heartbeat",async c=>{
     .bind(body.status==="unhealthy"?"unhealthy":"healthy",capacity,String(body.agent_version||"unknown").slice(0,40),node.id).run();
   return c.json({ok:true,server_id:node.id,server_time:new Date().toISOString()});
 });
+
+app.get("/api/projects",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const rows=await c.env.DB.prepare("SELECT p.id,p.name,p.runtime,p.runtime_version,p.status,p.created_at,v.name AS server_name FROM projects p JOIN users u ON u.id=p.user_id LEFT JOIN vps_servers v ON v.id=p.server_id WHERE u.telegram_id=? AND p.deleted_at IS NULL ORDER BY p.created_at DESC").bind(user.id).all();
+ return c.json({projects:rows.results||[]});
+});
+app.post("/api/projects",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const body=await c.req.json<{name:string;runtime:string;version:string}>().catch(()=>null);
+ if(!body||typeof body.name!=="string"||body.name.trim().length<2||body.name.trim().length>48||!["python","nodejs"].includes(body.runtime))return c.json({error:"INVALID_PROJECT"},400);
+ const versions:Record<string,string[]>={python:["3.11","3.12","3.13"],nodejs:["20","22","24"]};
+ if(!versions[body.runtime].includes(body.version))return c.json({error:"UNSUPPORTED_RUNTIME_VERSION"},400);
+ const account=await c.env.DB.prepare("SELECT id FROM users WHERE telegram_id=? AND status='active'").bind(user.id).first<{id:number}>();
+ if(!account)return c.json({error:"USER_NOT_FOUND"},404);
+ const plan=await c.env.DB.prepare("SELECT p.id,p.max_projects,p.cpu_millicores,p.ram_mb,p.storage_mb,p.allowed_runtimes,p.allowed_versions FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.id DESC LIMIT 1").bind(account.id).first<{id:number;max_projects:number;cpu_millicores:number;ram_mb:number;storage_mb:number;allowed_runtimes:string;allowed_versions:string}>();
+ if(!plan)return c.json({error:"ACTIVE_PLAN_REQUIRED"},403);
+ let allowedRuntimes:string[];try{allowedRuntimes=JSON.parse(plan.allowed_runtimes);}catch{allowedRuntimes=["python","nodejs"];}
+ if(!allowedRuntimes.includes(body.runtime))return c.json({error:"RUNTIME_NOT_INCLUDED"},403);
+ const count=await c.env.DB.prepare("SELECT COUNT(*) AS total FROM projects WHERE user_id=? AND deleted_at IS NULL").bind(account.id).first<{total:number}>();
+ if((count?.total||0)>=plan.max_projects)return c.json({error:"PROJECT_LIMIT_REACHED",limit:plan.max_projects},403);
+ const server=await c.env.DB.prepare("SELECT id FROM vps_servers WHERE enabled=1 AND status='healthy' ORDER BY CAST(json_extract(capacity_json,'$.memory_free_mb') AS INTEGER) DESC,id LIMIT 1").first<{id:number}>();
+ if(!server)return c.json({error:"NO_HEALTHY_VPS_AVAILABLE"},503);
+ const id=crypto.randomUUID();const taskId=crypto.randomUUID();
+ const payload={runtime:body.runtime,version:body.version,startup_command:"sleep infinity",cpu_millicores:Math.min(Math.max(plan.cpu_millicores,100),4000),ram_mb:Math.min(Math.max(plan.ram_mb,128),8192),pids_limit:128};
+ await c.env.DB.batch([
+  c.env.DB.prepare("INSERT INTO projects(id,user_id,server_id,name,runtime,runtime_version,status,startup_command,resource_limits_json) VALUES(?,?,?,?,?,?,'queued',?,?)").bind(id,account.id,server.id,body.name.trim(),body.runtime,body.version,payload.startup_command,JSON.stringify({cpu_millicores:payload.cpu_millicores,ram_mb:payload.ram_mb,storage_mb:plan.storage_mb})),
+  c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'create',?)").bind(taskId,server.id,id,JSON.stringify(payload))
+ ]);
+ return c.json({ok:true,project:{id,name:body.name.trim(),runtime:body.runtime,version:body.version,status:"queued"},task_id:taskId},202);
+});
+app.get("/api/agent/tasks",async c=>{
+ const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);
+ const hash=await sha256Hex(token);const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();
+ if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
+ await c.env.DB.prepare("UPDATE agent_tasks SET status='queued',lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE server_id=? AND status='leased' AND datetime(lease_expires_at)<=CURRENT_TIMESTAMP").bind(node.id).run();
+ const candidate=await c.env.DB.prepare("SELECT id FROM agent_tasks WHERE server_id=? AND status='queued' ORDER BY created_at LIMIT 1").bind(node.id).first<{id:string}>();
+ if(!candidate)return c.json({task:null});
+ const lease=crypto.randomUUID();
+ const claimed=await c.env.DB.prepare("UPDATE agent_tasks SET status='leased',lease_token=?,lease_expires_at=datetime('now','+90 seconds'),attempts=attempts+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND server_id=? AND status='queued'").bind(lease,candidate.id,node.id).run();
+ if(!claimed.meta.changes)return c.json({task:null});
+ const task=await c.env.DB.prepare("SELECT id,project_id,action,payload_json,lease_token FROM agent_tasks WHERE id=? AND server_id=?").bind(candidate.id,node.id).first<any>();
+ return c.json({task});
+});
+app.post("/api/agent/tasks/:id/result",async c=>{
+ const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);
+ const hash=await sha256Hex(token);const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();
+ if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
+ const body=await c.req.json<{lease_token:string;ok:boolean;result?:unknown;error?:string}>().catch(()=>null);
+ if(!body||typeof body.lease_token!=="string"||typeof body.ok!=="boolean")return c.json({error:"INVALID_RESULT"},400);
+ const task=await c.env.DB.prepare("SELECT project_id,action FROM agent_tasks WHERE id=? AND server_id=? AND status='leased' AND lease_token=?").bind(c.req.param("id"),node.id,body.lease_token).first<{project_id:string|null;action:string}>();
+ if(!task)return c.json({error:"TASK_LEASE_INVALID"},409);
+ const status=body.ok?"succeeded":"failed";
+ await c.env.DB.batch([
+  c.env.DB.prepare("UPDATE agent_tasks SET status=?,result_json=?,error=?,lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND lease_token=?").bind(status,JSON.stringify(body.result??null).slice(0,8000),String(body.error||"").slice(0,1000)||null,c.req.param("id"),body.lease_token),
+  ...(task.project_id?[c.env.DB.prepare("UPDATE projects SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",task.project_id)]:[])
+ ]);
+ return c.json({ok:true,status});
+});
+
 app.get("/api/admin/servers",async c=>{
   const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
   const rows=await c.env.DB.prepare("SELECT id,name,provider,region,endpoint,ssh_host,ssh_port,status,capacity_json,agent_version,last_heartbeat_at,enabled,last_error,created_at FROM vps_servers ORDER BY id DESC").all();
