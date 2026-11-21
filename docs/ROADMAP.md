@@ -32,7 +32,7 @@
 - [ ] Complete project CRUD, ZIP/file uploads, path traversal and zip-bomb validation, encrypted .env management and dependency build pipeline
 - [ ] Harden task channel with idempotent execution, mTLS/WireGuard deployment, node key rotation and operational alerting
 - [ ] Harden container isolation: rootless Docker, AppArmor/seccomp profiles, egress filtering, disk quotas, image pinning/scanning and abuse detection
-- [ ] Python/Node dependency installation, build caching, logs/console streaming, metrics, health checks, crash-loop controls and resource reporting
+- [x] Initial VPS-backed project file browser/editor, project start/stop/restart controls and bounded container log retrieval through leased agent tasks\n- [ ] True streaming build output, interactive browser console, file upload/download for arbitrary individual files, directory upload and full file-manager UX hardening\n- [ ] Python/Node dependency installation, build caching, metrics, health checks, crash-loop controls and resource reporting
 - [ ] Advanced VPS scheduler with resource-aware placement, quotas, node health, live migration and failover
 - [ ] VPS-backed file manager, project backups, retention, restore, export/import and off-node replication
 - [ ] Full responsive Admin Panel with granular staff roles, permissions and complete audit logging
