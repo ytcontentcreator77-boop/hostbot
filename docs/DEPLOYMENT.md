@@ -20,7 +20,8 @@ There is intentionally no R2 binding, bucket, SDK, upload path or deployment ste
 This repository is still an early development scaffold. Telegram initData validation, basic profile/plans/dashboard endpoints, owner/admin gating and webhook secret validation are present. The VPS inventory API, one-time node token registration and outbound agent heartbeat are implemented as an initial multi-provider foundation. The initial leased task channel and basic automatic VPS assignment are implemented. New projects currently receive an isolated placeholder container (`sleep infinity`); ZIP upload, file browsing, dependency installation/builds, real startup commands, logs, resource-aware placement and disk quota enforcement are not complete. The setup wizard, full project lifecycle, complete customer/admin UI, payment integrations and preserved announcement/campaign/bonus/coupon modules are also not complete. Do not use it for paying customers until these are implemented and security-tested.
 
 ## Project-only Termux SSH (experimental)
-1. Apply all D1 migrations with `npm run db:migrate:remote` after deploying the updated Worker (including `0011_agent_task_queue.sql`, `0012_agent_task_leases.sql` and `0013_project_zip_uploads.sql`).
+1. Apply all D1 migrations with `npm run db:migrate:remote` after deploying the updated Worker (including `0011_agent_task_queue.sql`, `0012_agent_task_leases.sql` and `0013_project_zip_uploads.sql
+- `0014_plan_file_size_limits.sql``).
 2. Configure each VPS agent with `TERMINAL_SSH_BIND=0.0.0.0`, `TERMINAL_SSH_PORT=2222`, and a persistent protected `TERMINAL_SSH_HOST_KEY` path. Keep `HOSTPILOT_AGENT_SECRET`, `NODE_TOKEN`, and the agent HTTP API private.
 3. When registering a VPS using `POST /api/admin/servers`, include `ssh_host` (the public DNS name/IP users will connect to) and `ssh_port` (normally 2222). Example body: `{"name":"node-1","provider":"custom","ssh_host":"vps.example.com","ssh_port":2222}`. The enrollment token is still shown only once.
 4. Allow inbound TCP 2222 to the SSH gateway in the VPS firewall. Do not expose agent HTTP port 8788. Prefer a VPN or source-IP allowlist for the SSH port.
@@ -44,3 +45,8 @@ This is an experimental feature. It has not yet been certified on a real VPS or 
 4. ZIP extraction rejects path traversal, symlinks, encrypted/unsupported entries, files above 20 MB, archives with more than 500 entries, total expansion above 100 MB and compression ratios above 100:1. A common top-level folder is stripped when present.
 5. Python detection looks for `main.py`, `bot.py`, `app.py`, `run.py` or `index.py`. It installs `requirements.txt` or a `pyproject.toml` project when present. Node detection reads `package.json` `main` and `scripts.start`, or falls back to `index.js`, `main.js`, `app.js`, `server.js` or `src/index.js`; it runs npm install when a package manifest is present.
 6. The project card shows the detected entry point and dependency manifests. Projects without a recognized entry point fail deployment and need a supported entry file or package start script.
+
+
+### Per-plan individual file-size limits
+
+Migration `0014_plan_file_size_limits.sql` adds `plans.max_file_bytes`, separate from the ZIP deployment limit. Defaults: Free 10 MB, Silver 50 MB, Platinum 100 MB, Gold 500 MB. Admins can change the per-file value up to 500 MB in the plan resource editor. This migration configures policy only; the current file-manager JSON task transport still has a 64 KB file read/write cap. Do not advertise large individual-file uploads as operational until the direct-to-VPS chunked upload gateway is deployed and tested. ZIP deployment remains separately capped at 20 MB while it uses D1 staging.
