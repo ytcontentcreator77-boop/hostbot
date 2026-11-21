@@ -42,10 +42,19 @@ const server=http.createServer(async(req,res)=>{
   const raw=await readBody(req);
   if(req.method==="GET"&&req.url==="/health"){reply(res,200,{ok:true,agent:"hostpilot-node-agent"});return;}
   if(!verify(req,raw)){reply(res,401,{error:"INVALID_AGENT_SIGNATURE"});return;}
-  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir|backup|restore)$/i);
+  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir|backup|restore|backup_delete)$/i);
   if(req.method!=="POST"||!match){reply(res,404,{error:"NOT_FOUND"});return;}
   const id=safeId(match[1]);const action=match[2];const name="hp-"+id;
 
+  if(action==="backup_delete"){
+   const input=raw?JSON.parse(raw):{};const backupId=String(input.backup_id||"");
+   if(!/^[a-f0-9-]{36}$/i.test(backupId))throw new Error("INVALID_BACKUP_ID");
+   const backupRoot=resolve(PROJECT_ROOT,"..","backups",id),archive=resolve(backupRoot,backupId+".tar.gz");
+   if(!archive.startsWith(backupRoot+sep))throw new Error("INVALID_BACKUP_PATH");
+   try{const st=await lstat(archive);if(st.isSymbolicLink()||!st.isFile())throw new Error("BACKUP_ARCHIVE_INVALID");await rm(archive,{force:true});}
+   catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+   reply(res,200,{backup_id:backupId,deleted:true});return;
+  }
   if(action==="backup"||action==="restore"){
    const input=raw?JSON.parse(raw):{};const backupId=String(input.backup_id||"");
    if(!/^[a-f0-9-]{36}$/i.test(backupId))throw new Error("INVALID_BACKUP_ID");
