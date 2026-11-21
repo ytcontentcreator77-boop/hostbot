@@ -49,6 +49,8 @@ const server=http.createServer(async(req,res)=>{
   const runtime=String(input.runtime||"");const version=String(input.version||"");const image=versions[runtime+":"+version];
   if(!image){reply(res,400,{error:"UNSUPPORTED_RUNTIME_VERSION"});return;}
   const startup=String(input.startup_command||"").trim();
+  const cpuMillicores=Number(input.cpu_millicores||500);const ramMb=Number(input.ram_mb||512);const pidsLimit=Number(input.pids_limit||128);
+  if(!Number.isInteger(cpuMillicores)||cpuMillicores<100||cpuMillicores>4000||!Number.isInteger(ramMb)||ramMb<128||ramMb>8192||!Number.isInteger(pidsLimit)||pidsLimit<32||pidsLimit>512){reply(res,400,{error:"INVALID_RESOURCE_LIMITS"});return;}
   if(!startup||startup.length>500){reply(res,400,{error:"INVALID_STARTUP_COMMAND"});return;}
   const envInput=input.env&&typeof input.env==="object"?input.env:{};
   const env=Object.entries(envInput).slice(0,100).map(([key,value])=>{if(!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)||typeof value!=="string"||value.length>8192)throw new Error("INVALID_ENVIRONMENT");return key+"="+value;});
@@ -56,11 +58,11 @@ const server=http.createServer(async(req,res)=>{
   let container;
   try{container=await getContainer(id);const info=await container.inspect();if(info.State.Running){await container.stop({t:10});}await container.remove({force:true});}catch{}
   container=await docker.createContainer({
-   name,Image:image,Cmd:["/bin/sh","-lc",startup],WorkingDir:"/workspace",User:"10001:10001",Env:env,
+   name,Image:image,Cmd:["/bin/sh","-lc",startup],WorkingDir:"/workspace",User:"0:0",Env:env,
    Labels:{"com.hostpilot.managed":"true","com.hostpilot.project":id},
    HostConfig:{
-    Binds:[dir+":/workspace:rw"],NetworkMode:"bridge",Memory:536870912,MemorySwap:536870912,
-    NanoCpus:500000000,PidsLimit:128,ReadonlyRootfs:true,CapDrop:["ALL"],
+    Binds:[dir+":/workspace:rw"],NetworkMode:"bridge",Memory:ramMb*1024*1024,MemorySwap:ramMb*1024*1024,
+    NanoCpus:cpuMillicores*1000000,PidsLimit:pidsLimit,ReadonlyRootfs:true,CapDrop:["ALL"],
     SecurityOpt:["no-new-privileges:true"],Tmpfs:{"/tmp":"rw,noexec,nosuid,size=64m"},
     RestartPolicy:{Name:"on-failure",MaximumRetryCount:3},
     LogConfig:{Type:"json-file",Config:{"max-size":"10m","max-file":"3"}}
