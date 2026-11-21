@@ -274,7 +274,7 @@ async function pollAgentTasks(){
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
    }
    const action=payload.upload_id?"upload_done":(controlAction?"control_done":(task.action==="create"?"start":task.action));
-   if(action!=="upload_done"&&!["start","stop","restart","delete"].includes(action))throw new Error("UNSUPPORTED_TASK_ACTION");
+   if(action!=="upload_done"&&action!=="control_done"&&!["start","stop","restart","delete"].includes(action))throw new Error("UNSUPPORTED_TASK_ACTION");
    if(action!=="upload_done"&&action!=="control_done")result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+action,payload);
   }catch(e){error=e instanceof Error?e.message:"AGENT_TASK_FAILED";}
   const ack=await fetch(CONTROL_PLANE_URL+"/api/agent/tasks/"+task.id+"/result",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+NODE_TOKEN},body:JSON.stringify({lease_token:task.lease_token,ok:!error,result,error}),signal:AbortSignal.timeout(10000)});
