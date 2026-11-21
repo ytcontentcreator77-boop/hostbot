@@ -61,7 +61,7 @@ const server=http.createServer(async(req,res)=>{
   let container;
   try{container=await getContainer(id);const info=await container.inspect();if(info.State.Running){await container.stop({t:10});}await container.remove({force:true});}catch{}
   container=await docker.createContainer({
-   name,Image:image,Cmd:["/bin/sh","-lc",startup],WorkingDir:"/workspace",User:"0:0",Env:env,
+   name,Image:image,Cmd:["/bin/sh","-lc",startup],WorkingDir:"/workspace",User:"0:0",Env:["HOME=/workspace","PIP_NO_CACHE_DIR=1","PYTHONDONTWRITEBYTECODE=1","PYTHONUNBUFFERED=1","npm_config_cache=/workspace/.hostpilot/npm-cache",...env.filter(item=>!["HOME","PIP_NO_CACHE_DIR","PYTHONDONTWRITEBYTECODE","PYTHONUNBUFFERED","npm_config_cache"].includes(item.split("=")[0]))],
    Labels:{"com.hostpilot.managed":"true","com.hostpilot.project":id},
    HostConfig:{
     Binds:[dir+":/workspace:rw"],NetworkMode:"bridge",Memory:ramMb*1024*1024,MemorySwap:ramMb*1024*1024,
