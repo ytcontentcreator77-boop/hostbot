@@ -125,6 +125,38 @@ app.post("/api/projects",async c=>{
  ]);
  return c.json({ok:true,project:{id,name:body.name.trim(),runtime:body.runtime,version:body.version,status:"queued"},task_id:taskId},202);
 });
+app.post("/api/projects/:id/upload",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const projectId=c.req.param("id");if(!/^[a-f0-9-]{36}$/i.test(projectId))return c.json({error:"INVALID_PROJECT_ID"},400);
+ const project=await c.env.DB.prepare("SELECT p.id,p.server_id,p.runtime,p.runtime_version,p.user_id FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(projectId,user.id).first<{id:string;server_id:number;runtime:string;runtime_version:string;user_id:number}>();
+ if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
+ const plan=await c.env.DB.prepare("SELECT p.max_upload_bytes FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.id DESC LIMIT 1").bind(project.user_id).first<{max_upload_bytes:number}>();
+ if(!plan)return c.json({error:"ACTIVE_PLAN_REQUIRED"},403);
+ const form=await c.req.formData().catch(()=>null);const file=form?.get("archive");
+ if(!file||typeof file==="string"||!file.name.toLowerCase().endsWith(".zip"))return c.json({error:"ZIP_FILE_REQUIRED"},400);
+ const limit=Math.min(plan.max_upload_bytes,20*1024*1024);if(file.size<4||file.size>limit)return c.json({error:"UPLOAD_SIZE_LIMIT",max_bytes:limit},413);
+ const bytes=new Uint8Array(await file.arrayBuffer());if(bytes[0]!==0x50||bytes[1]!==0x4b||![0x03,0x05,0x07].includes(bytes[2]))return c.json({error:"INVALID_ZIP_ARCHIVE"},400);
+ const uploadId=crypto.randomUUID();const chunkSize=256*1024;const chunkCount=Math.ceil(bytes.length/chunkSize);const cleanName=file.name.replace(/[^A-Za-z0-9._-]/g,"_").slice(0,120)||"project.zip";
+ const statements=[c.env.DB.prepare("INSERT INTO project_uploads(id,project_id,user_id,filename,size_bytes,chunk_count,status) VALUES(?,?,?,?,?,?,'queued')").bind(uploadId,projectId,project.user_id,cleanName,bytes.length,chunkCount)];
+ for(let i=0;i<chunkCount;i++){const chunk=bytes.slice(i*chunkSize,Math.min(bytes.length,(i+1)*chunkSize));statements.push(c.env.DB.prepare("INSERT INTO project_upload_chunks(upload_id,chunk_index,chunk_data) VALUES(?,?,?)").bind(uploadId,i,chunk.buffer));}
+ await c.env.DB.batch(statements);const taskId=crypto.randomUUID();const payload={upload_id:uploadId,runtime:project.runtime,version:project.runtime_version,cpu_millicores:500,ram_mb:512,pids_limit:128};
+ await c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'create',?)").bind(taskId,project.server_id,projectId,JSON.stringify(payload)).run();
+ return c.json({ok:true,upload_id:uploadId,task_id:taskId,size_bytes:bytes.length,status:"queued"},202);
+});
+app.get("/api/agent/uploads/:id",async c=>{
+ const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);const hash=await sha256Hex(token);
+ const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
+ const upload=await c.env.DB.prepare("SELECT u.id,u.filename,u.size_bytes,u.chunk_count,u.project_id,p.runtime,p.runtime_version FROM project_uploads u JOIN projects p ON p.id=u.project_id WHERE u.id=? AND p.server_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),node.id).first<any>();
+ if(!upload)return c.json({error:"UPLOAD_NOT_FOUND"},404);return c.json({upload});
+});
+app.get("/api/agent/uploads/:id/chunks/:index",async c=>{
+ const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);const hash=await sha256Hex(token);
+ const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
+ const index=Number(c.req.param("index"));if(!Number.isInteger(index)||index<0)return c.json({error:"INVALID_CHUNK_INDEX"},400);
+ const row=await c.env.DB.prepare("SELECT ch.chunk_data FROM project_upload_chunks ch JOIN project_uploads u ON u.id=ch.upload_id JOIN projects p ON p.id=u.project_id WHERE ch.upload_id=? AND ch.chunk_index=? AND p.server_id=?").bind(c.req.param("id"),index,node.id).first<{chunk_data:ArrayBuffer}>();
+ if(!row)return c.json({error:"UPLOAD_CHUNK_NOT_FOUND"},404);return new Response(row.chunk_data,{headers:{"content-type":"application/octet-stream","cache-control":"no-store"}});
+});
+
 app.get("/api/agent/tasks",async c=>{
  const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);
  const hash=await sha256Hex(token);const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();
