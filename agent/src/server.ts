@@ -137,7 +137,7 @@ async function startTerminalGateway(){
  ssh.listen(SSH_PORT,SSH_BIND,()=>process.stdout.write("HostPilot project SSH gateway listening on "+SSH_BIND+":"+SSH_PORT+"\\n"));
  setInterval(()=>void refreshTerminalKeys().catch(error=>process.stderr.write("Terminal key sync failed: "+String(error)+"\\n")),15000).unref();
 }
-const CONTROL_PLANE_URL=(process.env.CONTROL_PLANE_URL||"").replace(/\\/$/,"");
+const CONTROL_PLANE_URL=(process.env.CONTROL_PLANE_URL||"").replace(/\/$/,"");
 const NODE_TOKEN=process.env.NODE_TOKEN||"";
 async function sendHeartbeat(){
  if(!CONTROL_PLANE_URL||!NODE_TOKEN)return;
