@@ -1,9 +1,10 @@
 import http from "node:http";
-import { createHash, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
-import { mkdir, realpath, statfs } from "node:fs/promises";
+import { createHash, createHmac, timingSafeEqual, randomUUID, generateKeyPairSync } from "node:crypto";
+import { mkdir, realpath, statfs, readFile, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import os from "node:os";
 import Docker from "dockerode";
+import { Server as SSHServer } from "ssh2";
 
 const PORT=Number(process.env.PORT||8788);
 const SECRET=process.env.HOSTPILOT_AGENT_SECRET||"";
@@ -72,6 +73,69 @@ const server=http.createServer(async(req,res)=>{
   await container.start();reply(res,200,{id,status:"running",container:name,image});
  }catch(error){reply(res,400,{error:error instanceof Error?error.message:"AGENT_ERROR"});}
 });
+const SSH_BIND=process.env.TERMINAL_SSH_BIND||"0.0.0.0";
+const SSH_PORT=Number(process.env.TERMINAL_SSH_PORT||2222);
+const SSH_HOST_KEY=resolve(process.env.TERMINAL_SSH_HOST_KEY||"/srv/hostpilot/ssh/host_ed25519");
+const terminalKeys=new Map<string,Set<string>>();
+const activeSessions=new Map<string,Set<any>>();
+let terminalKeysLastSync=0;
+async function loadSshHostKey(){
+ await mkdir(resolve(SSH_HOST_KEY,".."),{recursive:true,mode:0o700});
+ try{return await readFile(SSH_HOST_KEY,"utf8");}catch{}
+ const pair=generateKeyPairSync("ed25519",{privateKeyEncoding:{type:"pkcs8",format:"pem"},publicKeyEncoding:{type:"spki",format:"pem"}});
+ try{await writeFile(SSH_HOST_KEY,pair.privateKey,{mode:0o600,flag:"wx"});return pair.privateKey;}catch{return await readFile(SSH_HOST_KEY,"utf8");}
+}
+async function refreshTerminalKeys(){
+ if(!CONTROL_PLANE_URL||!NODE_TOKEN)return;
+ const response=await fetch(CONTROL_PLANE_URL+"/api/agent/terminal/keys",{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(8000)});
+ if(!response.ok)throw new Error("TERMINAL_KEY_SYNC_"+response.status);
+ const payload=await response.json() as {keys?:Array<{username:string;project_id:string;key_blob:string}>};
+ const next=new Map<string,Set<string>>();
+ for(const item of payload.keys||[]){if(!/^hp_[a-f0-9]{32}$/i.test(item.username)||!/^[A-Za-z0-9+/]+={0,2}$/.test(item.key_blob))continue;const set=next.get(item.username)||new Set<string>();set.add(item.key_blob);next.set(item.username,set);}
+ for(const [username,oldKeys] of terminalKeys){const newKeys=next.get(username)||new Set<string>();if([...oldKeys].some(key=>!newKeys.has(key))){for(const session of activeSessions.get(username)||[])session.end("HostPilot SSH key revoked or rotated.");}}
+ terminalKeys.clear();for(const [username,keys] of next)terminalKeys.set(username,keys);terminalKeysLastSync=Date.now();
+}
+async function startTerminalGateway(){
+ if(!CONTROL_PLANE_URL||!NODE_TOKEN){process.stderr.write("Terminal SSH gateway disabled: configure CONTROL_PLANE_URL and NODE_TOKEN.\\n");return;}
+ if(!Number.isInteger(SSH_PORT)||SSH_PORT<1||SSH_PORT>65535)throw new Error("INVALID_TERMINAL_SSH_PORT");
+ const hostKey=await loadSshHostKey();
+ const ssh:any=new SSHServer({hostKeys:[hostKey]},(client:any)=>{
+  let authenticatedUser="";
+  client.on("authentication",(ctx:any)=>{
+   const keys=terminalKeys.get(ctx.username);const presented=ctx.key?.data?.toString("base64");
+   if(ctx.method==="publickey"&&keys&&presented&&keys.has(presented)&&Date.now()-terminalKeysLastSync<45000){authenticatedUser=ctx.username;ctx.accept();}else ctx.reject();
+  });
+  client.on("ready",()=>{
+   client.on("session",(acceptSession:any,rejectSession:any)=>{
+    if(!authenticatedUser){rejectSession();return;}
+    const session=acceptSession();let hasPty=false;
+    session.on("pty",(accept:any,reject:any)=>{hasPty=true;accept();});
+    session.on("shell",(accept:any,reject:any)=>{
+     if(!hasPty){reject();return;}
+     const sessions=activeSessions.get(authenticatedUser)||new Set<any>();if(sessions.size>=3){reject();return;}
+     const channel=accept();sessions.add(channel);activeSessions.set(authenticatedUser,sessions);
+     const projectId=authenticatedUser.slice(3);
+     void (async()=>{
+      try{const container=await getContainer(projectId);const info=await container.inspect();if(!info.State.Running){channel.stderr.write("HostPilot: project is stopped. Start it from the Mini App first.\\r\\n");channel.end();return;}
+       const exec=await container.exec({Cmd:["/bin/sh"],User:"0:0",WorkingDir:"/workspace",Env:["HOME=/workspace","TERM=xterm-256color"],AttachStdin:true,AttachStdout:true,AttachStderr:true,Tty:true});
+       const stream=await exec.start({hijack:true,stdin:true});channel.pipe(stream);stream.pipe(channel);
+       session.on("window-change",(size:any)=>{void exec.resize({h:size.rows,w:size.cols}).catch(()=>undefined);});
+       let idle:any=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();
+       const resetIdle=()=>{clearTimeout(idle);idle=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();};
+       channel.on("data",resetIdle);stream.on("data",resetIdle);
+       channel.on("close",()=>{clearTimeout(idle);stream.destroy();sessions.delete(channel);if(!sessions.size)activeSessions.delete(authenticatedUser);});
+      }catch{channel.stderr.write("HostPilot: unable to open this project container.\\r\\n");channel.end();sessions.delete(channel);if(!sessions.size)activeSessions.delete(authenticatedUser);}
+     })();
+    });
+    session.on("exec",(_accept:any,reject:any)=>reject());
+    session.on("subsystem",(_accept:any,reject:any)=>reject());
+   });
+  });
+ });
+ await refreshTerminalKeys().catch(error=>process.stderr.write("Terminal key sync failed: "+String(error)+"\\n"));
+ ssh.listen(SSH_PORT,SSH_BIND,()=>process.stdout.write("HostPilot project SSH gateway listening on "+SSH_BIND+":"+SSH_PORT+"\\n"));
+ setInterval(()=>void refreshTerminalKeys().catch(error=>process.stderr.write("Terminal key sync failed: "+String(error)+"\\n")),15000).unref();
+}
 const CONTROL_PLANE_URL=(process.env.CONTROL_PLANE_URL||"").replace(/\\/$/,"");
 const NODE_TOKEN=process.env.NODE_TOKEN||"";
 async function sendHeartbeat(){
@@ -98,6 +162,7 @@ async function sendHeartbeat(){
   if(!response.ok)process.stderr.write("HostPilot heartbeat rejected: "+response.status+"\\n");
  }catch(error){process.stderr.write("HostPilot heartbeat failed: "+(error instanceof Error?error.message:"network error")+"\\n");}
 }
+void startTerminalGateway().catch(error=>process.stderr.write("Terminal gateway failed to start: "+String(error)+"\\n"));
 server.listen(PORT,"127.0.0.1",()=>{
  if(!SECRET)process.stderr.write("HOSTPILOT_AGENT_SECRET is required; signed actions will be rejected.\\n");
  process.stdout.write("HostPilot agent listening on 127.0.0.1:"+PORT+"\\n");
