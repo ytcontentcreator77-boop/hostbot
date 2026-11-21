@@ -124,7 +124,7 @@ app.post("/api/admin/servers",async c=>{
 async function terminalEntitlement(db:D1Database,telegramId:number){
   const row=await db.prepare(`SELECT u.id,u.terminal_override,s.status AS subscription_status,p.slug AS plan_slug,
     COALESCE(p.terminal_enabled,0) AS plan_terminal_enabled
-    FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id AND s.status='active'
+    FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP
     LEFT JOIN plans p ON p.id=s.plan_id
     WHERE u.telegram_id=? ORDER BY s.id DESC LIMIT 1`).bind(telegramId)
     .first<{id:number;terminal_override:number|null;subscription_status:string|null;plan_slug:string|null;plan_terminal_enabled:number}>();
@@ -164,7 +164,7 @@ app.delete("/api/terminal/projects/:id/key",async c=>{
 app.get("/api/agent/terminal/keys",async c=>{
  const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);
  const hash=await sha256Hex(token);const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
- const rows=await c.env.DB.prepare("SELECT k.project_id,k.key_blob FROM terminal_ssh_keys k JOIN projects p ON p.id=k.project_id JOIN users u ON u.id=k.user_id LEFT JOIN subscriptions sub ON sub.user_id=u.id AND sub.status=? AND datetime(sub.expires_at)>CURRENT_TIMESTAMP LEFT JOIN plans plan ON plan.id=sub.plan_id WHERE p.server_id=? AND p.deleted_at IS NULL AND k.revoked_at IS NULL AND (u.terminal_override=1 OR (u.terminal_override IS NULL AND plan.terminal_enabled=1))").bind(node.id).all();
+ const rows=await c.env.DB.prepare("SELECT k.project_id,k.key_blob FROM terminal_ssh_keys k JOIN projects p ON p.id=k.project_id JOIN users u ON u.id=k.user_id LEFT JOIN subscriptions sub ON sub.user_id=u.id AND sub.status=? AND datetime(sub.expires_at)>CURRENT_TIMESTAMP LEFT JOIN plans plan ON plan.id=sub.plan_id WHERE p.server_id=? AND p.deleted_at IS NULL AND k.revoked_at IS NULL AND (u.terminal_override=1 OR (u.terminal_override IS NULL AND plan.terminal_enabled=1))").bind("active",node.id).all();
  return c.json({keys:(rows.results||[]).map((r:any)=>({username:"hp_"+String(r.project_id).replace(/-/g,""),project_id:r.project_id,key_blob:r.key_blob}))});
 });
 app.get("/api/terminal/access",async c=>{
