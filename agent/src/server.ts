@@ -180,12 +180,12 @@ const NODE_TOKEN=process.env.NODE_TOKEN||"";
 
 function zipCrc32(data:Buffer){let crc=0xffffffff;for(const byte of data){crc^=byte;for(let i=0;i<8;i++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return (crc^0xffffffff)>>>0;}
 function shellQuote(value:string){return "'"+value.replace(/'/g,"'\\''")+"'";}
-async function extractProjectZip(archive:Buffer,id:string,runtime:string){
+async function extractProjectZip(archive:Buffer,id:string,runtime:string,maxFiles=500,storageMb=100){
  if(archive.length<22||archive.length>20*1024*1024)throw new Error("ZIP_SIZE_INVALID");
  let eocd=-1;for(let i=archive.length-22;i>=Math.max(0,archive.length-65557);i--){if(archive.readUInt32LE(i)===0x06054b50){eocd=i;break;}}
  if(eocd<0)throw new Error("ZIP_DIRECTORY_MISSING");
  const entries=archive.readUInt16LE(eocd+10),centralSize=archive.readUInt32LE(eocd+12),centralOffset=archive.readUInt32LE(eocd+16);
- if(entries<1||entries>500||centralOffset+centralSize>eocd)throw new Error("ZIP_ENTRY_LIMIT_OR_DIRECTORY_INVALID");
+ if(entries<1||entries>500||entries>maxFiles||centralOffset+centralSize>eocd)throw new Error("ZIP_ENTRY_LIMIT_OR_DIRECTORY_INVALID");
  const rawEntries:Array<{name:string;method:number;compressed:number;size:number;crc:number;offset:number;mode:number}>=[];
  let pos=centralOffset,total=0;
  for(let i=0;i<entries;i++){
@@ -197,7 +197,7 @@ async function extractProjectZip(archive:Buffer,id:string,runtime:string){
   if(!name||name.includes("\\")||name.startsWith("/")||/^[A-Za-z]:/.test(name)||name.split("/").some(part=>part===".."||part==="."))throw new Error("ZIP_UNSAFE_PATH");
   if((mode&0xf000)===0xa000)throw new Error("ZIP_SYMLINK_NOT_ALLOWED");
   if(size>20*1024*1024)throw new Error("ZIP_FILE_TOO_LARGE");
-  total+=size;if(total>100*1024*1024)throw new Error("ZIP_EXPANDED_SIZE_LIMIT");
+  total+=size;if(total>100*1024*1024||total>Math.max(1,storageMb)*1024*1024)throw new Error("ZIP_EXPANDED_SIZE_LIMIT");
   if(compressed===0?size>0:size/compressed>100)throw new Error("ZIP_COMPRESSION_RATIO_LIMIT");
   rawEntries.push({name,method,compressed,size,crc,offset,mode});pos+=46+nameLen+extraLen+commentLen;
  }
@@ -263,7 +263,7 @@ async function pollAgentTasks(){
     const meta=(await metaResponse.json() as any).upload;if(!meta||meta.chunk_count<1||meta.chunk_count>80)throw new Error("UPLOAD_METADATA_INVALID");
     const chunks:Buffer[]=[];
     for(let i=0;i<meta.chunk_count;i++){const response=await fetch(CONTROL_PLANE_URL+"/api/agent/uploads/"+encodeURIComponent(String(payload.upload_id))+"/chunks/"+i,{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error("UPLOAD_CHUNK_DOWNLOAD_FAILED");chunks.push(Buffer.from(await response.arrayBuffer()));}
-    await signedLocalAgentAction("/v1/projects/"+task.project_id+"/stop",{}).catch(()=>undefined);uploadResult=await extractProjectZip(Buffer.concat(chunks),task.project_id,String(payload.runtime||"python"));payload.startup_command=uploadResult.startup_command;
+    await signedLocalAgentAction("/v1/projects/"+task.project_id+"/stop",{}).catch(()=>undefined);uploadResult=await extractProjectZip(Buffer.concat(chunks),task.project_id,String(payload.runtime||"python"),Number(payload.max_files||500),Number(payload.storage_mb||100));payload.startup_command=uploadResult.startup_command;
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/start",payload);
     result={...(result as any),...uploadResult};
    }
