@@ -35,12 +35,14 @@ app.get("/api/dashboard",async c=>{
   if(!user)return c.json({error:"UNAUTHORIZED"},401);
   const row=await c.env.DB.prepare("SELECT id FROM users WHERE telegram_id=?").bind(user.id).first<{id:number}>();
   if(!row)return c.json({error:"USER_NOT_REGISTERED"},404);
-  const [projects,sub,wallet]=await Promise.all([
+  const [projects,sub,wallets]=await Promise.all([
     c.env.DB.prepare("SELECT status,COUNT(*) AS count FROM projects WHERE user_id=? AND deleted_at IS NULL GROUP BY status").bind(row.id).all(),
     c.env.DB.prepare("SELECT s.status,s.expires_at,p.name AS plan_name FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? ORDER BY s.id DESC LIMIT 1").bind(row.id).first(),
-    c.env.DB.prepare("SELECT balance_minor,currency FROM wallets WHERE user_id=?").bind(row.id).first()
+    c.env.DB.prepare("SELECT balance_minor,currency FROM wallets WHERE user_id=? ORDER BY CASE currency WHEN 'USD' THEN 0 WHEN 'INR' THEN 1 ELSE 2 END").bind(row.id).all()
   ]);
-  return c.json({projects:projects.results||[],subscription:sub||null,wallet:wallet||{balance_minor:0,currency:"USD"}});
+  const walletList=(wallets.results||[]) as Array<{balance_minor:number;currency:string}>;
+  const primaryWallet=walletList.find(item=>item.currency==="USD")||walletList[0]||{balance_minor:0,currency:"USD"};
+  return c.json({projects:projects.results||[],subscription:sub||null,wallet:primaryWallet,wallets:walletList});
 });
 app.get("/api/languages",async c=>{
   const result=await c.env.DB.prepare("SELECT code,native_name FROM languages WHERE enabled=1 ORDER BY is_default DESC,native_name").all();
@@ -57,7 +59,7 @@ app.post("/api/language",async c=>{
   return c.json({ok:true,language_code:body.language_code});
 });
 app.get("/api/payment-methods",async c=>{
-  const methods=await c.env.DB.prepare("SELECT id,name,kind,instructions,min_amount_minor,max_amount_minor FROM payment_methods WHERE enabled=1 ORDER BY sort_order,id").all();
+  const methods=await c.env.DB.prepare("SELECT id,name,kind,instructions,min_amount_minor,max_amount_minor,currency FROM payment_methods WHERE enabled=1 ORDER BY sort_order,id").all();
   return c.json({methods:methods.results||[]});
 });
 app.post("/api/payment-requests",async c=>{
