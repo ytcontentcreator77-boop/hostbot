@@ -5,7 +5,7 @@ Telegram-based Python and Node.js cloud hosting control plane.
 ## Architecture
 - Cloudflare Worker: Telegram webhook, authenticated API and Mini App delivery.
 - Cloudflare D1: users, plans, subscriptions, wallet ledger, projects and control-plane metadata.
-- Ubuntu VPS nodes: isolated Python/Node.js containers and all customer project files, media and backups.
+- Provider-neutral VPS fleet: register compatible Linux VPS machines from any provider; each runs a HostPilot agent and isolated Python/Node.js containers. Project files, media and backups stay on VPS disks.
 - GitHub Actions: control-plane and VPS-agent validation.
 
 **Supported billing currencies: USD ($) and INR (₹) only. USDT and other cryptocurrencies are not supported.** Each user has separate USD and INR wallet balances; no automatic conversion occurs.
@@ -23,6 +23,6 @@ The repository contains an early customer Mini App, Worker API foundations, data
 5. Apply migrations with `npm run db:migrate:remote`.
 6. Run `npm run deploy`.
 
-The VPS agent is a separate Node.js service under `agent/`. It must run on a dedicated Ubuntu VPS with rootless Docker and private-network/mTLS access. Never expose the agent port publicly.
+The VPS agent is a separate Node.js service under `agent/`. It is designed for compatible Linux VPS machines from any provider, using Docker and outbound HTTPS heartbeats. Provider-specific cloud APIs are not required. The current enrollment/heartbeat is only an initial foundation; remote job dispatch and production hardening remain unfinished.
 
 Do not accept customer workloads or payments until the remaining security, runtime, UI, setup and integration work is complete and tested.
