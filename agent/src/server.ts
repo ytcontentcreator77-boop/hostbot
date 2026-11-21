@@ -18,7 +18,7 @@ const versions:Record<string,string>={
  "nodejs:20":"node:20-bookworm-slim","nodejs:22":"node:22-bookworm-slim","nodejs:24":"node:24-bookworm-slim"
 };
 function reply(res:http.ServerResponse,status:number,data:unknown){res.writeHead(status,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));}
-async function readBody(req:http.IncomingMessage):Promise<string>{let raw="";for await(const chunk of req) {raw+=chunk.toString();if(raw.length>65536)throw new Error("BODY_TOO_LARGE");}return raw;}
+async function readBody(req:http.IncomingMessage):Promise<string>{let raw="";for await(const chunk of req) {raw+=chunk.toString();if(raw.length>120000)throw new Error("BODY_TOO_LARGE");}return raw;}
 function verify(req:http.IncomingMessage,raw:string):boolean{
  if(!SECRET)return false;
  const ts=req.headers["x-hostpilot-timestamp"],nonce=req.headers["x-hostpilot-nonce"],signature=req.headers["x-hostpilot-signature"];
@@ -39,7 +39,7 @@ const server=http.createServer(async(req,res)=>{
   const raw=await readBody(req);
   if(req.method==="GET"&&req.url==="/health"){reply(res,200,{ok:true,agent:"hostpilot-node-agent"});return;}
   if(!verify(req,raw)){reply(res,401,{error:"INVALID_AGENT_SIGNATURE"});return;}
-  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status)$/i);
+  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir)$/i);
   if(req.method!=="POST"||!match){reply(res,404,{error:"NOT_FOUND"});return;}
   const id=safeId(match[1]);const action=match[2];const name="hp-"+id;
 
@@ -47,7 +47,7 @@ const server=http.createServer(async(req,res)=>{
    const input=raw?JSON.parse(raw):{};const root=await projectDirectory(id);const relative=String(input.path||"");
    if(relative.length>512||relative.startsWith("/")||relative.split("/").some((part:string)=>part===".."||part==="."))throw new Error("INVALID_FILE_PATH");
    const target=resolve(root,relative||".");if(target!==root&&!target.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");
-   const parent=resolve(target,"..");const realParent=await realpath(parent);if(realParent!==root&&!realParent.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");
+   if(target!==root){const parent=resolve(target,"..");const realParent=await realpath(parent);if(realParent!==root&&!realParent.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");}
    if(action==="logs"){
     const container=await getContainer(id);const info=await container.inspect();const logs=await container.logs({stdout:true,stderr:true,tail:250,timestamps:true});
     reply(res,200,{id,status:info.State.Status,logs:Buffer.from(logs).toString("utf8").slice(-160000)});return;
