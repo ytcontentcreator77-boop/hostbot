@@ -7,7 +7,7 @@ This agent is an early isolated-container execution prototype. It is not product
 - Set a high-entropy `HOSTPILOT_AGENT_SECRET`; Worker requests use HMAC-SHA256 over timestamp, nonce, method, URL path and SHA-256 body hash.
 - Nonces are kept briefly to reject replayed requests.
 - Use rootless Docker and a dedicated OS account. The agent's Docker socket is effectively privileged to that Docker daemon.
-- Customer containers run non-root, drop Linux capabilities, use no-new-privileges, read-only root filesystem, bounded memory/CPU/PIDs and capped Docker logs.
+- Customer containers run as root only inside a rootless Docker user namespace (not host root), drop Linux capabilities, use no-new-privileges, read-only root filesystem, bounded memory/CPU/PIDs and capped Docker logs. Keep the agent account dedicated to HostPilot.
 - Project directories are derived from UUIDs beneath `PROJECT_ROOT`; clients cannot supply host paths.
 - Runtime images are allowlisted. No HTML/static-site hosting.
 
