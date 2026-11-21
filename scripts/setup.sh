@@ -11,6 +11,8 @@ echo "HostPilot first-time deployment"
 echo "This configures Cloudflare D1, Worker secrets, deployment and Telegram webhook."
 echo
 
+npm install
+
 read -r -p "Public HTTPS Mini App URL (e.g. https://hostpilot.example.com): " APP_URL
 APP_URL="${APP_URL%/}"
 case "$APP_URL" in https://*) ;; *) echo "APP_URL must begin with https://"; exit 1;; esac
@@ -62,7 +64,6 @@ printf '%s' "$BOT_TOKEN" | npx wrangler secret put BOT_TOKEN
 printf '%s' "$WEBHOOK_SECRET" | npx wrangler secret put BOT_WEBHOOK_SECRET
 
 echo "Applying D1 migrations..."
-npm install
 npm run db:migrate:remote
 
 echo "Building and deploying HostPilot..."
