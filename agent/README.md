@@ -22,7 +22,7 @@ This agent is an early isolated-container execution prototype. It is not product
 2. Create a dedicated project root: `sudo install -d -m 0770 -o hostpilot -g hostpilot /srv/hostpilot/projects`.
 3. Copy `.env.example` values into a protected environment file; set `HOSTPILOT_AGENT_SECRET`, `CONTROL_PLANE_URL` and the one-time `NODE_TOKEN` generated when an administrator registers this VPS in HostPilot. Never commit either secret.
 4. Optionally set `GITHUB_TOKEN` in the protected agent environment. It must be a GitHub token with write access to the selected backup repository and read access for restore. Never add it to the Worker, Mini App, task payloads, or source control.\n5. Run `npm install`, `npm run build`, then run the compiled server under systemd.
-5. Expose it only over private networking / mTLS; do not open port 8788 publicly.
+6. Expose it only over private networking / mTLS; do not open port 8788 publicly.
 
 ## Important limitations
 The agent now supports leased Worker task dispatch, ZIP extraction and dependency-aware startup, project file operations, bounded log retrieval, VPS-side tar backups/restores and optional GitHub branch backup/restore. GitHub backup requires `GITHUB_TOKEN` on each VPS agent; the target repository must already exist and the selected token must have repository write permission. GitHub backups exclude `.git`, `node_modules`, `.venv`, `__pycache__` and `.hostpilot`. File downloads are relayed in bounded chunks. These features are development implementations, not production-certified. Rootless Docker, AppArmor/seccomp, egress filtering, disk quotas, image scanning, resource accounting and real-VPS adversarial testing remain required before accepting untrusted workloads.
