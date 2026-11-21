@@ -1,5 +1,4 @@
 -- HostPilot expansion: project lifecycle, payments, localization and retained engagement tools.
-ALTER TABLE users ADD COLUMN last_name TEXT;
 ALTER TABLE users ADD COLUMN can_message INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE users ADD COLUMN last_seen_at TEXT;
 ALTER TABLE plans ADD COLUMN description TEXT NOT NULL DEFAULT '';
