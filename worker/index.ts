@@ -45,12 +45,12 @@ app.post("/api/payment-requests",async c=>{
   const body=await c.req.json<{method_id:number;amount_minor:number;reference?:string}>().catch(()=>null);
   if(!body||!Number.isSafeInteger(body.amount_minor)||body.amount_minor<=0||!Number.isInteger(body.method_id))return c.json({error:"INVALID_REQUEST"},400);
   const account=await c.env.DB.prepare("SELECT id FROM users WHERE telegram_id=?").bind(user.id).first<{id:number}>();
-  const method=await c.env.DB.prepare("SELECT id,min_amount_minor,max_amount_minor FROM payment_methods WHERE id=? AND enabled=1").bind(body.method_id).first<{id:number;min_amount_minor:number;max_amount_minor:number|null}>();
+  const method=await c.env.DB.prepare("SELECT id,min_amount_minor,max_amount_minor,currency FROM payment_methods WHERE id=? AND enabled=1").bind(body.method_id).first<{id:number;min_amount_minor:number;max_amount_minor:number|null;currency:string}>();
   if(!account||!method)return c.json({error:"METHOD_NOT_AVAILABLE"},404);
   if(body.amount_minor<method.min_amount_minor||(method.max_amount_minor!==null&&body.amount_minor>method.max_amount_minor))return c.json({error:"AMOUNT_OUT_OF_RANGE"},400);
   const id=crypto.randomUUID();
   await c.env.DB.prepare("INSERT INTO payment_requests(id,user_id,method_id,amount_minor,currency,reference,idempotency_key) VALUES(?,?,?,?,?,?,?)")
-    .bind(id,account.id,method.id,body.amount_minor,"USD",String(body.reference||"").slice(0,160)||null,"deposit:"+id).run();
+    .bind(id,account.id,method.id,body.amount_minor,method.currency,String(body.reference||"").slice(0,160)||null,"deposit:"+id).run();
   return c.json({id,status:"pending"},201);
 });
 app.get("/api/admin/overview",async c=>{
@@ -99,7 +99,7 @@ app.post("/api/admin/payments/:id/review",async c=>{
       const existing=await c.env.DB.prepare("SELECT id FROM wallet_transactions WHERE idempotency_key=?").bind(key).first();
       if(!existing)return c.json({error:e instanceof Error?e.message:"CREDIT_FAILED"},409);
     }
-    await c.env.DB.prepare("UPDATE payment_requests SET status='approved',reviewed_by=?,review_note=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'")
+    await c.env.DB.prepare("UPDATE payment_requests SET reviewed_by=?,review_note=? WHERE id=? AND status='approved' AND reviewed_by IS NULL")
       .bind(admin.id,String(body.note||"").slice(0,500),id).run();
   }
   await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)")
