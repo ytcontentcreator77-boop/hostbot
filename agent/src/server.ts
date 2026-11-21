@@ -50,7 +50,7 @@ const server=http.createServer(async(req,res)=>{
   if(action==="github_backup"||action==="github_restore"){
    const input=raw?JSON.parse(raw):{};const root=await projectDirectory(id);const repository=String(input.repository||"").trim();const branchName=String(input.branch||"hostpilot-backup").trim();
    if(!GITHUB_TOKEN)throw new Error("GITHUB_BACKUP_TOKEN_NOT_CONFIGURED_ON_AGENT");
-   if(!/^[A-Za-z0-9_.-]{1,39}\\/[A-Za-z0-9_.-]{1,100}$/.test(repository)||!/^[-A-Za-z0-9._/]{1,100}$/.test(branchName)||branchName.includes(".."))throw new Error("INVALID_GITHUB_REPOSITORY_OR_BRANCH");
+   if(!/^[A-Za-z0-9_.-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(repository)||!/^[-A-Za-z0-9._/]{1,100}$/.test(branchName)||branchName.includes(".."))throw new Error("INVALID_GITHUB_REPOSITORY_OR_BRANCH");
    const backupRoot=resolve(PROJECT_ROOT,"..","backups",id);await mkdir(backupRoot,{recursive:true,mode:0o700});
    const staging=resolve(backupRoot,"github-"+randomUUID());const remote="https://github.com/"+repository+".git";
    const auth="AUTHORIZATION: basic "+Buffer.from("x-access-token:"+GITHUB_TOKEN).toString("base64");
