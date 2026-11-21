@@ -56,7 +56,7 @@ const server=http.createServer(async(req,res)=>{
    const backupRoot=resolve(PROJECT_ROOT,"..","backups",id);await mkdir(backupRoot,{recursive:true,mode:0o700});
    const staging=resolve(backupRoot,"github-"+randomUUID());const remote="https://github.com/"+repository+".git";
    const auth="AUTHORIZATION: basic "+Buffer.from("x-access-token:"+GITHUB_TOKEN).toString("base64");
-   const git=async(args:string[],cwd?:string)=>execFileAsync("git",["-c","http.extraheader="+auth,...args],{cwd,timeout:600000,maxBuffer:4*1024*1024});
+   const git=async(args:string[],cwd?:string)=>execFileAsync("git",args,{cwd,env:{...process.env,GIT_CONFIG_COUNT:"1",GIT_CONFIG_KEY_0:"http.extraheader",GIT_CONFIG_VALUE_0:auth},timeout:600000,maxBuffer:4*1024*1024});
    try{
     if(action==="github_backup"){
      try{await git(["clone","--depth","1","--branch",branchName,remote,staging]);}catch{await rm(staging,{recursive:true,force:true});await mkdir(staging,{recursive:true,mode:0o700});await git(["init",staging]);await git(["-C",staging,"remote","add","origin",remote]);}
