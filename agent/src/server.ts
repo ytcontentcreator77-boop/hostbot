@@ -140,6 +140,39 @@ async function startTerminalGateway(){
 }
 const CONTROL_PLANE_URL=(process.env.CONTROL_PLANE_URL||"").replace(/\/$/,"");
 const NODE_TOKEN=process.env.NODE_TOKEN||"";
+
+let taskPollBusy=false;
+async function signedLocalAgentAction(path:string,body:unknown){
+ const raw=JSON.stringify(body||{});const ts=String(Math.floor(Date.now()/1000));const nonce=randomUUID();
+ const bodyHash=createHash("sha256").update(raw).digest("hex");
+ const signature=createHmac("sha256",SECRET).update([ts,nonce,"POST",path,bodyHash].join("\n")).digest("hex");
+ const response=await fetch("http://127.0.0.1:"+PORT+path,{method:"POST",headers:{"content-type":"application/json","x-hostpilot-timestamp":ts,"x-hostpilot-nonce":nonce,"x-hostpilot-signature":signature},body:raw,signal:AbortSignal.timeout(120000)});
+ const data=await response.json().catch(()=>({error:"INVALID_AGENT_RESPONSE"})) as any;
+ if(!response.ok)throw new Error(String(data.error||"AGENT_ACTION_FAILED"));
+ return data;
+}
+async function pollAgentTasks(){
+ if(taskPollBusy||!CONTROL_PLANE_URL||!NODE_TOKEN)return;
+ taskPollBusy=true;
+ try{
+  const response=await fetch(CONTROL_PLANE_URL+"/api/agent/tasks",{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(10000)});
+  if(!response.ok)throw new Error("TASK_POLL_"+response.status);
+  const data=await response.json() as {task?:{id:string;project_id:string;action:string;payload_json:string;lease_token:string}|null};
+  const task=data.task;if(!task)return;
+  let result:unknown=null;let error="";
+  try{
+   if(!/^[a-f0-9-]{36}$/i.test(task.project_id))throw new Error("INVALID_TASK_PROJECT");
+   const payload=JSON.parse(task.payload_json||"{}");
+   const action=task.action==="create"?"start":task.action;
+   if(!["start","stop","restart","delete"].includes(action))throw new Error("UNSUPPORTED_TASK_ACTION");
+   result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+action,payload);
+  }catch(e){error=e instanceof Error?e.message:"AGENT_TASK_FAILED";}
+  const ack=await fetch(CONTROL_PLANE_URL+"/api/agent/tasks/"+task.id+"/result",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+NODE_TOKEN},body:JSON.stringify({lease_token:task.lease_token,ok:!error,result,error}),signal:AbortSignal.timeout(10000)});
+  if(!ack.ok)process.stderr.write("HostPilot task acknowledgement failed: "+ack.status+"\n");
+ }catch(error){process.stderr.write("HostPilot task polling failed: "+(error instanceof Error?error.message:"unknown error")+"\n");}
+ finally{taskPollBusy=false;}
+}
+
 async function sendHeartbeat(){
  if(!CONTROL_PLANE_URL||!NODE_TOKEN)return;
  try{
@@ -169,5 +202,5 @@ server.listen(PORT,"127.0.0.1",()=>{
  if(!SECRET)process.stderr.write("HOSTPILOT_AGENT_SECRET is required; signed actions will be rejected.\\n");
  process.stdout.write("HostPilot agent listening on 127.0.0.1:"+PORT+"\\n");
  if(!CONTROL_PLANE_URL||!NODE_TOKEN)process.stderr.write("Set CONTROL_PLANE_URL and NODE_TOKEN to connect this VPS to HostPilot.\\n");
- else {void sendHeartbeat();setInterval(()=>void sendHeartbeat(),30000);}
+ else {void sendHeartbeat();setInterval(()=>void sendHeartbeat(),30000);void pollAgentTasks();setInterval(()=>void pollAgentTasks(),5000).unref();}
 });
