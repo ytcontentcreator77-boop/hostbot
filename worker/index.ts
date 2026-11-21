@@ -317,6 +317,9 @@ app.post("/api/agent/tasks/:id/result",async c=>{
  if(task.project_id&&(!taskPayload.control_action||["start","stop","restart"].includes(taskPayload.control_action))){
   statements.push(c.env.DB.prepare("UPDATE projects SET status=?,entry_file=COALESCE(?,entry_file),startup_command=COALESCE(?,startup_command),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",body.ok&&body.result&&typeof body.result==="object"?(body.result as any).entry_file||null:null,body.ok&&body.result&&typeof body.result==="object"?(body.result as any).startup_command||null:null,task.project_id));
  }
+ if(taskPayload.backup_id&&taskPayload.backup_action==="delete"){
+  statements.push(c.env.DB.prepare("UPDATE backups SET status=? WHERE id=? AND project_id=?").bind(body.ok?"deleted":"failed",taskPayload.backup_id,task.project_id));
+ }
  if(taskPayload.backup_id&&taskPayload.backup_action==="create"){
   const backupResult=body.result&&typeof body.result==="object"?body.result as any:{};
   statements.push(c.env.DB.prepare("UPDATE backups SET status=?,size_bytes=?,storage_path=? WHERE id=? AND project_id=?").bind(body.ok?"completed":"failed",body.ok?Math.max(0,Number(backupResult.size_bytes||0)):0,String(taskPayload.backup_id),taskPayload.backup_id,task.project_id));
@@ -581,4 +584,25 @@ app.post("/bot",async c=>{
 });
 app.all("/api/*",c=>c.json({error:"NOT_IMPLEMENTED",message:"This endpoint is not implemented yet."},501));
 app.get("*",c=>c.env.ASSETS.fetch(c.req.raw));
-export default app;
+async function runBackupRetention(db:D1Database){
+ const expired=await db.prepare(`SELECT b.id,b.project_id,b.server_id FROM backups b
+  JOIN projects p ON p.id=b.project_id
+  WHERE b.status='completed' AND b.expires_at IS NOT NULL AND datetime(b.expires_at)<=CURRENT_TIMESTAMP
+  AND p.deleted_at IS NULL ORDER BY b.expires_at LIMIT 50`).all<{id:string;project_id:string;server_id:number}>();
+ let queued=0;
+ for(const backup of expired.results||[]){
+  const taskId=crypto.randomUUID();
+  const results=await db.batch([
+   db.prepare("UPDATE backups SET status='deleting' WHERE id=? AND status='completed'").bind(backup.id),
+   db.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) SELECT ?,?,?, 'restart', ? WHERE EXISTS(SELECT 1 FROM backups WHERE id=? AND status='deleting')").bind(taskId,backup.server_id,backup.project_id,JSON.stringify({control_action:"backup",backup_action:"delete",backup_id:backup.id}),backup.id)
+  ]);
+  if(results[0]?.meta?.changes)queued++;
+ }
+ return queued;
+}
+export default {
+ fetch: app.fetch,
+ async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext){
+  ctx.waitUntil(runBackupRetention(env.DB).catch(error=>console.error("HostPilot backup retention failed",error)));
+ }
+};
