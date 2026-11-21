@@ -20,6 +20,46 @@ app.use("/api/*",async(c,next)=>{
  await next();
 });
 app.get("/health", c => c.json({ ok: true, service: "hostpilot-control-plane" }));
+
+async function sendHostPilotBotMessage(env:Env,chatId:number,text:string,privateChat:boolean){
+ const keyboard=privateChat&&env.APP_URL&&/^https:\/\//i.test(env.APP_URL)
+  ?{inline_keyboard:[[{text:"Open HostPilot",web_app:{url:env.APP_URL}}]]}
+  :undefined;
+ const response=await fetch("https://api.telegram.org/bot"+env.BOT_TOKEN+"/sendMessage",{
+  method:"POST",headers:{"content-type":"application/json"},
+  body:JSON.stringify({chat_id:chatId,text,disable_web_page_preview:true,...(keyboard?{reply_markup:keyboard}:{})})
+ });
+ const result=await response.json() as {ok?:boolean;description?:string};
+ if(!response.ok||!result.ok)throw new Error("Telegram sendMessage failed: "+String(result.description||response.status));
+}
+app.post("/bot",async c=>{
+ if(!c.env.BOT_TOKEN||!c.env.BOT_WEBHOOK_SECRET)return c.json({error:"BOT_NOT_CONFIGURED"},503);
+ const supplied=c.req.header("X-Telegram-Bot-Api-Secret-Token")||"";
+ if(!constantTimeEqual(supplied,c.env.BOT_WEBHOOK_SECRET))return c.json({error:"UNAUTHORIZED"},401);
+ const update=await c.req.json<any>().catch(()=>null);
+ const message=update?.message;
+ const chatId=Number(message?.chat?.id);
+ if(!Number.isSafeInteger(chatId)||chatId<=0||typeof message?.text!=="string")return c.json({ok:true});
+ const privateChat=message?.chat?.type==="private";
+ const command=String(message.text).trim().split(/\s+/,1)[0].split("@",1)[0].toLowerCase();
+ const ownerIds=(c.env.OWNER_IDS||"").split(",").map((value:string)=>value.trim()).filter(Boolean);
+ let reply="";
+ if(command==="/start"||command==="/app"){
+  reply="Welcome to HostPilot 👋\n\nDeploy and manage your Python and Node.js applications, files, backups and hosting plans from one place.\n\nTap Open HostPilot below to launch the secure Mini App.";
+ }else if(command==="/help"){
+  reply="HostPilot commands:\n/start — welcome and open the app\n/app — launch the HostPilot Mini App\n/help — show this help\n/admin — open the app's admin panel (administrators only).";
+ }else if(command==="/admin"){
+  if(!ownerIds.includes(String(message.from?.id))){
+   const staff=await c.env.DB.prepare("SELECT telegram_id FROM administrators WHERE telegram_id=?").bind(Number(message.from?.id)||0).first();
+   if(!staff){await sendHostPilotBotMessage(c.env,chatId,"This command is available to HostPilot administrators only.",privateChat);return c.json({ok:true});}
+  }
+  reply="HostPilot administration is available inside the Mini App. Open the app and choose Admin.";
+ }else{
+  reply="Use /start to open HostPilot, or /help to see available commands.";
+ }
+ await sendHostPilotBotMessage(c.env,chatId,reply,privateChat);
+ return c.json({ok:true});
+});
 app.get("/api/public", async c => {
   const row = await c.env.DB.prepare("SELECT value FROM settings WHERE key='setup_done'").first<{value:string}>();
   return c.json({configured:row?.value==="1",service:"HostPilot"});
