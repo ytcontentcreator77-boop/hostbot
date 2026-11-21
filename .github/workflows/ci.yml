@@ -12,6 +12,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Validate setup script
+        run: bash -n scripts/setup.sh
       - name: Validate control plane
         run: |
           npm install
