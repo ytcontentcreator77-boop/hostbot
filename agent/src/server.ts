@@ -50,7 +50,7 @@ const server=http.createServer(async(req,res)=>{
    if(target!==root){const parent=resolve(target,"..");const realParent=await realpath(parent);if(realParent!==root&&!realParent.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");}
    if(action==="logs"){
     const container=await getContainer(id);const info=await container.inspect();const logs=await container.logs({stdout:true,stderr:true,tail:250,timestamps:true});
-    reply(res,200,{id,status:info.State.Status,logs:Buffer.from(logs).toString("utf8").slice(-160000)});return;
+    reply(res,200,{id,status:info.State.Status,logs:Buffer.from(logs).toString("utf8").slice(-80000)});return;
    }
    if(action==="file_list"){
     const dir=await realpath(target);if(dir!==root&&!dir.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");
