@@ -13,6 +13,7 @@ const execFileAsync=promisify(execFile);
 const PORT=Number(process.env.PORT||8788);
 const SECRET=process.env.HOSTPILOT_AGENT_SECRET||"";
 const GITHUB_TOKEN=process.env.GITHUB_TOKEN||"";
+const GITHUB_BACKUP_REPOSITORY=process.env.GITHUB_BACKUP_REPOSITORY||"";
 const PROJECT_ROOT=resolve(process.env.PROJECT_ROOT||"/srv/hostpilot/projects");
 const DOCKER_SOCKET=process.env.DOCKER_SOCKET||process.env.DOCKER_HOST||"/run/user/1000/docker.sock";
 const docker=new Docker(DOCKER_SOCKET.startsWith("unix://")?{socketPath:DOCKER_SOCKET.slice(7)}:{socketPath:DOCKER_SOCKET});
@@ -48,8 +49,9 @@ const server=http.createServer(async(req,res)=>{
   const id=safeId(match[1]);const action=match[2];const name="hp-"+id;
 
   if(action==="github_backup"||action==="github_restore"){
-   const input=raw?JSON.parse(raw):{};const root=await projectDirectory(id);const repository=String(input.repository||"").trim();const branchName=String(input.branch||"hostpilot-backup").trim();
+   const input=raw?JSON.parse(raw):{};const root=await projectDirectory(id);const repository=String(input.repository||"").trim();const branchName="hostpilot-"+id;
    if(!GITHUB_TOKEN)throw new Error("GITHUB_BACKUP_TOKEN_NOT_CONFIGURED_ON_AGENT");
+   if(!GITHUB_BACKUP_REPOSITORY||repository!==GITHUB_BACKUP_REPOSITORY)throw new Error("GITHUB_REPOSITORY_NOT_ALLOWED_ON_AGENT");
    if(!/^[A-Za-z0-9_.-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(repository)||!/^[-A-Za-z0-9._/]{1,100}$/.test(branchName)||branchName.includes(".."))throw new Error("INVALID_GITHUB_REPOSITORY_OR_BRANCH");
    const backupRoot=resolve(PROJECT_ROOT,"..","backups",id);await mkdir(backupRoot,{recursive:true,mode:0o700});
    const staging=resolve(backupRoot,"github-"+randomUUID());const remote="https://github.com/"+repository+".git";
