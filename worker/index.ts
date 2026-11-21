@@ -751,6 +751,16 @@ app.get("/api/admin/plans",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
  const rows=await c.env.DB.prepare("SELECT * FROM plans ORDER BY sort_order,id").all();return c.json({plans:rows.results||[]});
 });
+app.post("/api/admin/plans",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);
+ if(!b||typeof b.name!=="string"||!b.name.trim()||typeof b.slug!=="string"||!/^[a-z0-9-]{2,40}$/.test(b.slug)||!Number.isSafeInteger(b.price_minor)||b.price_minor<0||!Number.isSafeInteger(b.duration_days)||b.duration_days<1)return c.json({error:"INVALID_PLAN"},400);
+ const numeric=["max_projects","max_upload_bytes","max_file_bytes","max_files","cpu_millicores","ram_mb","storage_mb"];
+ if(numeric.some(k=>!Number.isSafeInteger(b[k])||b[k]<1))return c.json({error:"INVALID_PLAN_LIMITS"},400);
+ try{const r=await c.env.DB.prepare("INSERT INTO plans(name,slug,description,badge,price_minor,currency,duration_days,max_projects,max_upload_bytes,max_file_bytes,max_files,cpu_millicores,ram_mb,storage_mb,enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+ .bind(b.name.trim().slice(0,80),b.slug,String(b.description||"").slice(0,1000),String(b.badge||"").slice(0,40),b.price_minor,b.currency==="INR"?"INR":"USD",b.duration_days,b.max_projects,b.max_upload_bytes,b.max_file_bytes,b.max_files,b.cpu_millicores,b.ram_mb,b.storage_mb,b.enabled===false?0:1).run();
+ return c.json({ok:true,id:r.meta.last_row_id},201);}catch{return c.json({error:"PLAN_SLUG_ALREADY_EXISTS_OR_INVALID"},409);}
+});
 app.put("/api/admin/plans/:id",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
  const b=await c.req.json<any>().catch(()=>null);if(!b)return c.json({error:"INVALID_PLAN"},400);
