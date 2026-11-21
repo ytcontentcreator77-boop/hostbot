@@ -28,7 +28,7 @@ app.get("/api/me", async c => {
   return c.json({user:profile,is_admin:!!admin});
 });
 app.get("/api/plans",async c=>{
-  const result=await c.env.DB.prepare("SELECT id,name,slug,description,badge,price_minor,currency,duration_days,max_projects,max_upload_bytes,max_files,cpu_millicores,ram_mb,storage_mb,allowed_runtimes,enabled FROM plans WHERE enabled=1 ORDER BY sort_order,id").all();
+  const result=await c.env.DB.prepare("SELECT id,name,slug,description,badge,price_minor,currency,duration_days,max_projects,max_upload_bytes,max_file_bytes,max_files,cpu_millicores,ram_mb,storage_mb,allowed_runtimes,enabled FROM plans WHERE enabled=1 ORDER BY sort_order,id").all();
   return c.json({plans:result.results||[]});
 });
 app.get("/api/dashboard",async c=>{
