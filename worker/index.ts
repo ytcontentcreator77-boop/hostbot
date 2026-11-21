@@ -658,9 +658,10 @@ app.post("/api/admin/announcements",async c=>{
  if(!b||typeof b.title!=="string"||!b.title.trim()||b.title.length>160||typeof b.description!=="string"||b.description.length>4000)return c.json({error:"INVALID_ANNOUNCEMENT"},400);
  const buttonEnabled=!!b.button_enabled,buttonText=String(b.button_text||"").trim().slice(0,40),buttonUrl=String(b.button_url||"").trim();
  if(buttonEnabled&&(!buttonText||!/^https:\/\//i.test(buttonUrl)))return c.json({error:"BUTTON_REQUIRES_HTTPS_URL"},400);
- const id=crypto.randomUUID();await c.env.DB.prepare("INSERT INTO announcements(id,title,description,image_url,button_text,button_url,button_enabled,enabled,starts_at,ends_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
- .bind(id,b.title.trim(),b.description,String(b.image_url||"").slice(0,1000)||null,buttonText||null,buttonUrl||null,buttonEnabled?1:0,b.enabled===false?0:1,b.starts_at||null,b.ends_at||null,admin.id).run();
- return c.json({ok:true,id},201);
+ const imageUrl=String(b.image_url||"").slice(0,1000)||null;
+ const result=await c.env.DB.prepare("INSERT INTO announcements(title,body,description,image_path,image_url,button_text,button_url,button_enabled,enabled,starts_at,ends_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+ .bind(b.title.trim(),b.description,b.description,imageUrl,imageUrl,buttonText||null,buttonUrl||null,buttonEnabled?1:0,b.enabled===false?0:1,b.starts_at||null,b.ends_at||null,admin.id).run();
+ return c.json({ok:true,id:result.meta.last_row_id},201);
 });
 app.put("/api/admin/announcements/:id",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
@@ -668,8 +669,9 @@ app.put("/api/admin/announcements/:id",async c=>{
  const current=await c.env.DB.prepare("SELECT * FROM announcements WHERE id=?").bind(c.req.param("id")).first<any>();if(!current)return c.json({error:"NOT_FOUND"},404);
  const buttonEnabled=!!b.button_enabled,buttonText=String(b.button_text||"").trim().slice(0,40),buttonUrl=String(b.button_url||"").trim();
  if(buttonEnabled&&(!buttonText||!/^https:\/\//i.test(buttonUrl)))return c.json({error:"BUTTON_REQUIRES_HTTPS_URL"},400);
- await c.env.DB.prepare("UPDATE announcements SET title=?,description=?,image_url=?,button_text=?,button_url=?,button_enabled=?,enabled=?,starts_at=?,ends_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
- .bind(String(b.title===undefined?current.title:b.title).trim().slice(0,160),String(b.description===undefined?current.description:b.description).slice(0,4000),String((b.image_url===undefined?current.image_url:b.image_url)||"").slice(0,1000)||null,String((b.button_text===undefined?current.button_text:b.button_text)||"").slice(0,40)||null,String((b.button_url===undefined?current.button_url:b.button_url)||"").slice(0,1000)||null,(b.button_enabled===undefined?current.button_enabled:(buttonEnabled?1:0)),(b.enabled===undefined?current.enabled:(b.enabled===false?0:1)),(b.starts_at===undefined?current.starts_at:b.starts_at),(b.ends_at===undefined?current.ends_at:b.ends_at),c.req.param("id")).run();
+ const nextTitle=String(b.title===undefined?current.title:b.title).trim().slice(0,160),nextDescription=String(b.description===undefined?current.description:b.description).slice(0,4000),nextImage=String((b.image_url===undefined?current.image_url:b.image_url)||"").slice(0,1000)||null;
+ await c.env.DB.prepare("UPDATE announcements SET title=?,body=?,description=?,image_path=?,image_url=?,button_text=?,button_url=?,button_enabled=?,enabled=?,starts_at=?,ends_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+ .bind(nextTitle,nextDescription,nextDescription,nextImage,nextImage,String((b.button_text===undefined?current.button_text:b.button_text)||"").slice(0,40)||null,String((b.button_url===undefined?current.button_url:b.button_url)||"").slice(0,1000)||null,(b.button_enabled===undefined?current.button_enabled:(buttonEnabled?1:0)),(b.enabled===undefined?current.enabled:(b.enabled===false?0:1)),(b.starts_at===undefined?current.starts_at:b.starts_at),(b.ends_at===undefined?current.ends_at:b.ends_at),Number(c.req.param("id"))).run();
  return c.json({ok:true});
 });
 app.delete("/api/admin/announcements/:id",async c=>{
@@ -685,9 +687,10 @@ app.post("/api/admin/campaigns",async c=>{
  const b=await c.req.json<any>().catch(()=>null);
  if(!b||typeof b.title!=="string"||!b.title.trim()||b.title.length>160||!["all","active","premium","free"].includes(b.audience||"all"))return c.json({error:"INVALID_CAMPAIGN"},400);
  const scheduledAt=String(b.scheduled_at||"").trim()||null;if(scheduledAt&&Number.isNaN(Date.parse(scheduledAt)))return c.json({error:"INVALID_SCHEDULE_TIME"},400);
- const id=crypto.randomUUID(),status=scheduledAt?"scheduled":"draft";await c.env.DB.prepare("INSERT INTO campaigns(id,title,description,audience,payload_json,status,scheduled_at,created_by) VALUES(?,?,?,?,?,?,?,?)")
- .bind(id,b.title.trim(),String(b.description||"").slice(0,4000),b.audience||"all",JSON.stringify({image_url:b.image_url||null,button_text:b.button_text||null,button_url:b.button_url||null}),status,scheduledAt,admin.id).run();
- return c.json({ok:true,id,status},201);
+ const status=scheduledAt?"scheduled":"draft",payload={image_url:b.image_url||null,button_text:b.button_text||null,button_url:b.button_url||null};
+ const result=await c.env.DB.prepare("INSERT INTO campaigns(title,description,kind,reward_minor,currency,config_json,enabled,starts_at,audience,payload_json,status,scheduled_at,created_by,updated_at) VALUES(?,?,'broadcast',0,'USD',?,1,?,?,?,?,?,?,CURRENT_TIMESTAMP)")
+ .bind(b.title.trim(),String(b.description||"").slice(0,4000),JSON.stringify(payload),scheduledAt,b.audience||"all",JSON.stringify(payload),status,scheduledAt,admin.id).run();
+ return c.json({ok:true,id:result.meta.last_row_id,status},201);
 });
 app.put("/api/admin/campaigns/:id",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
@@ -709,9 +712,9 @@ app.post("/api/admin/coupons",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
  const b=await c.req.json<any>().catch(()=>null);const code=String(b?.code||"").trim().toUpperCase();
  if(!b||!/^[A-Z0-9_-]{3,32}$/.test(code)||!["percent","fixed"].includes(b.discount_type)||!Number.isSafeInteger(b.discount_value)||b.discount_value<1||(b.discount_type==="percent"&&b.discount_value>100))return c.json({error:"INVALID_COUPON"},400);
- const id=crypto.randomUUID();try{await c.env.DB.prepare("INSERT INTO coupons(id,code,discount_type,discount_value,currency,max_redemptions,starts_at,expires_at,enabled,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)")
- .bind(id,code,b.discount_type,b.discount_value,b.currency==="INR"?"INR":"USD",Number.isSafeInteger(b.max_redemptions)&&b.max_redemptions>0?b.max_redemptions:null,b.starts_at||null,b.expires_at||null,b.enabled===false?0:1,admin.id).run();}
- catch{return c.json({error:"COUPON_CODE_ALREADY_EXISTS"},409);}return c.json({ok:true,id},201);
+ let result:any;try{result=await c.env.DB.prepare("INSERT INTO coupons(code,kind,value_minor,currency,max_redemptions,per_user_limit,redeemed_count,enabled,expires_at,discount_type,discount_value,redemption_count,starts_at,created_by) VALUES(?,?,?,?,?,1,0,?,?,?,?,?,?,?)")
+ .bind(code,b.discount_type,b.discount_value,b.currency==="INR"?"INR":"USD",Number.isSafeInteger(b.max_redemptions)&&b.max_redemptions>0?b.max_redemptions:null,b.enabled===false?0:1,b.expires_at||null,b.discount_type,b.discount_value,0,b.starts_at||null,admin.id).run();}
+ catch{return c.json({error:"COUPON_CODE_ALREADY_EXISTS"},409);}return c.json({ok:true,id:result.meta.last_row_id},201);
 });
 app.put("/api/admin/coupons/:id",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
