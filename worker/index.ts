@@ -152,7 +152,7 @@ app.post("/api/terminal/projects/:id/key",async c=>{
  if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);if(!project.server_id)return c.json({error:"PROJECT_NOT_ASSIGNED_TO_VPS"},409);
  const server=await c.env.DB.prepare("SELECT ssh_host,ssh_port,enabled FROM vps_servers WHERE id=?").bind(project.server_id).first<{ssh_host:string|null;ssh_port:number;enabled:number}>();
  if(!server||!server.enabled||!server.ssh_host)return c.json({error:"SSH_ENDPOINT_NOT_CONFIGURED"},409);
- const digest=await crypto.subtle.digest("SHA-256",decoded);const fingerprint="SHA256:"+btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/=+$/,"");
+ const keyBytes=new ArrayBuffer(decoded.length);new Uint8Array(keyBytes).set(decoded);const digest=await crypto.subtle.digest("SHA-256",keyBytes);const fingerprint="SHA256:"+btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/=+$/,"");
  const previousKey=await c.env.DB.prepare("SELECT fingerprint FROM terminal_ssh_keys WHERE project_id=? AND user_id=? AND revoked_at IS NULL").bind(projectId,project.user_id).first<{fingerprint:string}>();
  await c.env.DB.prepare("INSERT INTO terminal_ssh_keys(project_id,user_id,key_type,key_blob,fingerprint,revoked_at) VALUES(?,?,?,?,?,NULL) ON CONFLICT(project_id,user_id) DO UPDATE SET key_type=excluded.key_type,key_blob=excluded.key_blob,fingerprint=excluded.fingerprint,created_at=CURRENT_TIMESTAMP,revoked_at=NULL").bind(projectId,project.user_id,keyType,blob,fingerprint).run();
  await c.env.DB.prepare("INSERT INTO terminal_ssh_key_events(project_id,user_id,action,fingerprint) VALUES(?,?,?,?)").bind(projectId,project.user_id,previousKey?"rotated":"registered",fingerprint).run();
