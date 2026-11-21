@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS vps_health_logs (
 CREATE TABLE IF NOT EXISTS payment_methods (
  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT NOT NULL, instructions TEXT NOT NULL DEFAULT '',
  config_encrypted TEXT, min_amount_minor INTEGER NOT NULL DEFAULT 0, max_amount_minor INTEGER,
- enabled INTEGER NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL DEFAULT 0
+ enabled INTEGER NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'USD'
 );
 CREATE TABLE IF NOT EXISTS payment_requests (
  id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), method_id INTEGER NOT NULL REFERENCES payment_methods(id),
