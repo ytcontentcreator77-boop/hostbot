@@ -17,6 +17,7 @@ jobs:
           npm install
           npm run typecheck
           npm run build
+          npx wrangler d1 migrations apply hostpilot --local
       - name: Validate VPS agent
         working-directory: agent
         run: |
