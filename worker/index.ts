@@ -164,6 +164,44 @@ app.get("/api/projects/:id/tasks/:task_id",async c=>{
  return c.json({task:{id:row.id,status:row.status,result,error:row.error,created_at:row.created_at}});
 });
 
+
+app.get("/api/projects/:id/backups",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const project=await c.env.DB.prepare("SELECT p.id FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),user.id).first();
+ if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
+ const rows=await c.env.DB.prepare("SELECT id,size_bytes,status,created_at,expires_at FROM backups WHERE project_id=? ORDER BY created_at DESC LIMIT 10").bind(c.req.param("id")).all();
+ return c.json({backups:rows.results||[]});
+});
+app.post("/api/projects/:id/backups",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const project=await c.env.DB.prepare("SELECT p.id,p.user_id,p.server_id FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),user.id).first<any>();
+ if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
+ const active=await c.env.DB.prepare("SELECT id FROM subscriptions WHERE user_id=? AND status='active' AND datetime(expires_at)>CURRENT_TIMESTAMP").bind(project.user_id).first();
+ if(!active)return c.json({error:"ACTIVE_PLAN_REQUIRED"},403);
+ const pending=await c.env.DB.prepare("SELECT id FROM backups WHERE project_id=? AND status IN ('queued','running','restoring') LIMIT 1").bind(project.id).first();
+ if(pending)return c.json({error:"BACKUP_TASK_ALREADY_RUNNING"},409);
+ const count=await c.env.DB.prepare("SELECT COUNT(*) AS total FROM backups WHERE project_id=? AND status='completed'").bind(project.id).first<any>();
+ if(Number(count?.total||0)>=5)return c.json({error:"BACKUP_RETENTION_LIMIT",limit:5},409);
+ const backupId=crypto.randomUUID(),taskId=crypto.randomUUID();
+ await c.env.DB.batch([
+  c.env.DB.prepare("INSERT INTO backups(id,project_id,server_id,storage_path,size_bytes,status,expires_at) VALUES(?,?,?,?,0,'queued',datetime('now','+30 days'))").bind(backupId,project.id,project.server_id,backupId),
+  c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'restart',?)").bind(taskId,project.server_id,project.id,JSON.stringify({control_action:"backup",backup_action:"create",backup_id:backupId}))
+ ]);
+ return c.json({ok:true,backup_id:backupId,task_id:taskId,status:"queued"},202);
+});
+app.post("/api/projects/:id/backups/:backup_id/restore",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const project=await c.env.DB.prepare("SELECT p.id,p.server_id FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),user.id).first<any>();
+ if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
+ const backup=await c.env.DB.prepare("SELECT id,status FROM backups WHERE id=? AND project_id=? AND server_id=?").bind(c.req.param("backup_id"),project.id,project.server_id).first<any>();
+ if(!backup||backup.status!=="completed")return c.json({error:"BACKUP_NOT_RESTORABLE"},404);
+ const pending=await c.env.DB.prepare("SELECT id FROM agent_tasks WHERE project_id=? AND status IN ('queued','leased') LIMIT 1").bind(project.id).first();
+ if(pending)return c.json({error:"PROJECT_TASK_IN_PROGRESS"},409);
+ const taskId=crypto.randomUUID();
+ await c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'restart',?)").bind(taskId,project.server_id,project.id,JSON.stringify({control_action:"backup",backup_action:"restore",backup_id:backup.id})).run();
+ return c.json({ok:true,task_id:taskId,status:"queued"},202);
+});
+
 app.post("/api/projects/:id/files/upload/init",async c=>{
  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
  const projectId=c.req.param("id");if(!/^[a-f0-9-]{36}$/i.test(projectId))return c.json({error:"INVALID_PROJECT_ID"},400);
@@ -278,6 +316,10 @@ app.post("/api/agent/tasks/:id/result",async c=>{
  ];
  if(task.project_id&&(!taskPayload.control_action||["start","stop","restart"].includes(taskPayload.control_action))){
   statements.push(c.env.DB.prepare("UPDATE projects SET status=?,entry_file=COALESCE(?,entry_file),startup_command=COALESCE(?,startup_command),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",body.ok&&body.result&&typeof body.result==="object"?(body.result as any).entry_file||null:null,body.ok&&body.result&&typeof body.result==="object"?(body.result as any).startup_command||null:null,task.project_id));
+ }
+ if(taskPayload.backup_id&&taskPayload.backup_action==="create"){
+  const backupResult=body.result&&typeof body.result==="object"?body.result as any:{};
+  statements.push(c.env.DB.prepare("UPDATE backups SET status=?,size_bytes=?,storage_path=? WHERE id=? AND project_id=?").bind(body.ok?"completed":"failed",body.ok?Math.max(0,Number(backupResult.size_bytes||0)):0,String(taskPayload.backup_id),taskPayload.backup_id,task.project_id));
  }
  if(taskPayload.upload_id){
   statements.push(c.env.DB.prepare("UPDATE project_uploads SET status=?,detected_json=? WHERE id=?").bind(body.ok?(taskPayload.file_upload?"uploaded":"deployed"):"failed",JSON.stringify(body.result||{error:body.error||"UPLOAD_FAILED"}).slice(0,12000),taskPayload.upload_id));
