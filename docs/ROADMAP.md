@@ -12,14 +12,14 @@
 - [x] Default wallet and Free subscription provisioning on first authenticated Mini App visit
 - [x] Owner/admin authorization foundation and admin overview API
 - [x] Telegram webhook secret-header verification
-- [x] Wallet ledger service with immutable entries, balance triggers, multi-currency balances and idempotent deposit approval foundation
+- [x] Wallet ledger service with immutable entries, balance triggers, separate USD ($) and INR (₹) balances only, currency allowlist triggers and idempotent deposit approval foundation
 - [x] Payment request creation and admin wallet adjustment/deposit review API foundations
 - [x] Experimental VPS agent prototype with HMAC signatures, replay protection, runtime image allowlist and constrained Docker containers
 - [x] CI workflow configured to typecheck/build the Worker frontend and compile the VPS agent
 - [x] No R2 dependency; customer files/media/backups are assigned to VPS storage
 
 ## Still remaining before production
-- [ ] Run CI and fix any type/build failures; add unit, migration and integration tests
+- [ ] Confirm CI after dependency alignment; add unit, migration and integration tests
 - [ ] Setup wizard, bot identity/profile/menu setup, webhook registration automation and permanent installer lock
 - [ ] Complete paginated 28-language picker, translation import/overrides and synchronized bot/Mini App localization
 - [ ] Full customer dashboard metrics, onboarding checklist, notifications and Telegram-native interactions
