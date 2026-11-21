@@ -116,6 +116,50 @@ app.post("/api/admin/servers",async c=>{
     .bind(admin.id,"server.register","vps_server",String(serverId),JSON.stringify({name:body.name,provider,region}),"success").run();
   return c.json({ok:true,server_id:serverId,agent_token:token,warning:"Copy this token now. It is shown only once."},201);
 });
+
+async function terminalEntitlement(db:D1Database,telegramId:number){
+  const row=await db.prepare(`SELECT u.id,u.terminal_override,s.status AS subscription_status,p.slug AS plan_slug,
+    COALESCE(p.terminal_enabled,0) AS plan_terminal_enabled
+    FROM users u LEFT JOIN subscriptions s ON s.user_id=u.id AND s.status='active'
+    LEFT JOIN plans p ON p.id=s.plan_id
+    WHERE u.telegram_id=? ORDER BY s.id DESC LIMIT 1`).bind(telegramId)
+    .first<{id:number;terminal_override:number|null;subscription_status:string|null;plan_slug:string|null;plan_terminal_enabled:number}>();
+  if(!row)return {allowed:false,source:"none",reason:"USER_NOT_FOUND"};
+  const allowed=row.terminal_override===1?true:row.terminal_override===0?false:row.plan_terminal_enabled===1;
+  return {allowed,source:row.terminal_override===null?"plan":"admin_override",
+    plan:row.plan_slug||"free",reason:allowed?"ENABLED":"TERMINAL_NOT_INCLUDED"};
+}
+app.get("/api/terminal/access",async c=>{
+  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);
+  if(!user)return c.json({error:"UNAUTHORIZED"},401);
+  return c.json(await terminalEntitlement(c.env.DB,user.id));
+});
+app.get("/api/admin/terminal/plans",async c=>{
+  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+  const rows=await c.env.DB.prepare("SELECT id,name,slug,terminal_enabled FROM plans ORDER BY sort_order,id").all();
+  return c.json({plans:rows.results||[]});
+});
+app.put("/api/admin/terminal/plans/:id",async c=>{
+  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+  const id=Number(c.req.param("id"));const body=await c.req.json<{enabled:boolean}>().catch(()=>null);
+  if(!Number.isSafeInteger(id)||id<1||!body||typeof body.enabled!=="boolean")return c.json({error:"INVALID_REQUEST"},400);
+  const result=await c.env.DB.prepare("UPDATE plans SET terminal_enabled=? WHERE id=?").bind(body.enabled?1:0,id).run();
+  if(!result.meta.changes)return c.json({error:"PLAN_NOT_FOUND"},404);
+  await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)")
+    .bind(admin.id,"terminal.plan_access","plan",String(id),JSON.stringify({enabled:body.enabled}),"success").run();
+  return c.json({ok:true,plan_id:id,terminal_enabled:body.enabled});
+});
+app.put("/api/admin/terminal/users/:telegram_id",async c=>{
+  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+  const telegramId=Number(c.req.param("telegram_id"));const body=await c.req.json<{enabled:boolean|null}>().catch(()=>null);
+  if(!Number.isSafeInteger(telegramId)||telegramId<1||!body||!(body.enabled===true||body.enabled===false||body.enabled===null))return c.json({error:"INVALID_REQUEST"},400);
+  const result=await c.env.DB.prepare("UPDATE users SET terminal_override=? WHERE telegram_id=?").bind(body.enabled===null?null:body.enabled?1:0,telegramId).run();
+  if(!result.meta.changes)return c.json({error:"USER_NOT_FOUND"},404);
+  await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)")
+    .bind(admin.id,"terminal.user_override","user",String(telegramId),JSON.stringify({enabled:body.enabled}),"success").run();
+  return c.json({ok:true,telegram_id:telegramId,terminal_override:body.enabled});
+});
+
 app.get("/api/admin/overview",async c=>{
   const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
   const [users,projects,payments,servers]=await Promise.all([
