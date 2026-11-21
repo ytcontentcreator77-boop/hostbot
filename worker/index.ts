@@ -294,17 +294,17 @@ app.get("/api/terminal/access",async c=>{
 
 app.get("/api/admin/plans/resources",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
- const rows=await c.env.DB.prepare("SELECT id,name,slug,max_projects,max_files,max_upload_bytes,cpu_millicores,ram_mb,storage_mb,terminal_enabled FROM plans ORDER BY sort_order,id").all();
+ const rows=await c.env.DB.prepare("SELECT id,name,slug,max_projects,max_files,max_upload_bytes,max_file_bytes,cpu_millicores,ram_mb,storage_mb,terminal_enabled FROM plans ORDER BY sort_order,id").all();
  return c.json({plans:rows.results||[]});
 });
 app.put("/api/admin/plans/:id/resources",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
  const id=Number(c.req.param("id"));const body=await c.req.json<any>().catch(()=>null);
- const fields=["max_projects","max_files","max_upload_bytes","cpu_millicores","ram_mb","storage_mb"];
+ const fields=["max_projects","max_files","max_upload_bytes","max_file_bytes","cpu_millicores","ram_mb","storage_mb"];
  if(!Number.isSafeInteger(id)||id<1||!body||fields.some(key=>!Number.isSafeInteger(body[key])))return c.json({error:"INVALID_RESOURCE_LIMITS"},400);
- const ranges:any={max_projects:[1,100],max_files:[1,10000],max_upload_bytes:[1024,20*1024*1024],cpu_millicores:[100,4000],ram_mb:[128,8192],storage_mb:[128,1048576]};
+ const ranges:any={max_projects:[1,100],max_files:[1,10000],max_upload_bytes:[1024,20*1024*1024],max_file_bytes:[1024,500*1024*1024],cpu_millicores:[100,4000],ram_mb:[128,8192],storage_mb:[128,1048576]};
  for(const key of fields)if(body[key]<ranges[key][0]||body[key]>ranges[key][1])return c.json({error:"RESOURCE_LIMIT_OUT_OF_RANGE",field:key},400);
- const result=await c.env.DB.prepare("UPDATE plans SET max_projects=?,max_files=?,max_upload_bytes=?,cpu_millicores=?,ram_mb=?,storage_mb=? WHERE id=?").bind(body.max_projects,body.max_files,body.max_upload_bytes,body.cpu_millicores,body.ram_mb,body.storage_mb,id).run();
+ const result=await c.env.DB.prepare("UPDATE plans SET max_projects=?,max_files=?,max_upload_bytes=?,max_file_bytes=?,cpu_millicores=?,ram_mb=?,storage_mb=? WHERE id=?").bind(body.max_projects,body.max_files,body.max_upload_bytes,body.max_file_bytes,body.cpu_millicores,body.ram_mb,body.storage_mb,id).run();
  if(!result.meta.changes)return c.json({error:"PLAN_NOT_FOUND"},404);
  await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)").bind(admin.id,"plan.resource_limits","plan",String(id),JSON.stringify(body),"success").run();
  return c.json({ok:true,plan_id:id,limits:body});
