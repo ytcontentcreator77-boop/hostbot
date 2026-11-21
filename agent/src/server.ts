@@ -77,6 +77,7 @@ const SSH_BIND=process.env.TERMINAL_SSH_BIND||"0.0.0.0";
 const SSH_PORT=Number(process.env.TERMINAL_SSH_PORT||2222);
 const SSH_HOST_KEY=resolve(process.env.TERMINAL_SSH_HOST_KEY||"/srv/hostpilot/ssh/host_ed25519");
 const terminalKeys=new Map<string,Set<string>>();
+const terminalProjects=new Map<string,string>();
 const activeSessions=new Map<string,Set<any>>();
 let terminalKeysLastSync=0;
 async function loadSshHostKey(){
@@ -90,10 +91,10 @@ async function refreshTerminalKeys(){
  const response=await fetch(CONTROL_PLANE_URL+"/api/agent/terminal/keys",{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(8000)});
  if(!response.ok)throw new Error("TERMINAL_KEY_SYNC_"+response.status);
  const payload=await response.json() as {keys?:Array<{username:string;project_id:string;key_blob:string}>};
- const next=new Map<string,Set<string>>();
- for(const item of payload.keys||[]){if(!/^hp_[a-f0-9]{32}$/i.test(item.username)||!/^[A-Za-z0-9+/]+={0,2}$/.test(item.key_blob))continue;const set=next.get(item.username)||new Set<string>();set.add(item.key_blob);next.set(item.username,set);}
+ const next=new Map<string,Set<string>>();const nextProjects=new Map<string,string>();
+ for(const item of payload.keys||[]){if(!/^hp_[a-f0-9]{32}$/i.test(item.username)||!/^[A-Za-z0-9+/]+={0,2}$/.test(item.key_blob))continue;const set=next.get(item.username)||new Set<string>();set.add(item.key_blob);next.set(item.username,set);nextProjects.set(item.username,item.project_id);}
  for(const [username,oldKeys] of terminalKeys){const newKeys=next.get(username)||new Set<string>();if([...oldKeys].some(key=>!newKeys.has(key))){for(const session of activeSessions.get(username)||[])session.end("HostPilot SSH key revoked or rotated.");}}
- terminalKeys.clear();for(const [username,keys] of next)terminalKeys.set(username,keys);terminalKeysLastSync=Date.now();
+ terminalKeys.clear();for(const [username,keys] of next)terminalKeys.set(username,keys);terminalProjects.clear();for(const [username,id] of nextProjects)terminalProjects.set(username,id);terminalKeysLastSync=Date.now();
 }
 async function startTerminalGateway(){
  if(!CONTROL_PLANE_URL||!NODE_TOKEN){process.stderr.write("Terminal SSH gateway disabled: configure CONTROL_PLANE_URL and NODE_TOKEN.\\n");return;}
@@ -114,7 +115,7 @@ async function startTerminalGateway(){
      if(!hasPty){reject();return;}
      const sessions=activeSessions.get(authenticatedUser)||new Set<any>();if(sessions.size>=3){reject();return;}
      const channel=accept();sessions.add(channel);activeSessions.set(authenticatedUser,sessions);
-     const projectId=authenticatedUser.slice(3);
+     const projectId=terminalProjects.get(authenticatedUser)||"";
      void (async()=>{
       try{const container=await getContainer(projectId);const info=await container.inspect();if(!info.State.Running){channel.stderr.write("HostPilot: project is stopped. Start it from the Mini App first.\\r\\n");channel.end();return;}
        const exec=await container.exec({Cmd:["/bin/sh"],User:"0:0",WorkingDir:"/workspace",Env:["HOME=/workspace","TERM=xterm-256color"],AttachStdin:true,AttachStdout:true,AttachStderr:true,Tty:true});
