@@ -4,6 +4,21 @@ import { appendWalletTransaction } from "./ledger";
 import { constantTimeEqual, requireAdmin, type Env } from "./guards";
 
 const app = new Hono<{ Bindings: Env }>();
+app.use("/api/*",async(c,next)=>{
+ const initData=c.req.header("X-Telegram-Init-Data")||"";
+ if(initData){
+  const identity=await validateInitData(initData,c.env.BOT_TOKEN);
+  if(identity){
+   const row=await c.env.DB.prepare("SELECT id,status FROM users WHERE telegram_id=?").bind(identity.id).first<{id:number;status:string}>();
+   if(row?.status==="suspended"){
+    const owner=(c.env.OWNER_IDS||"").split(",").map(x=>x.trim()).includes(String(identity.id));
+    const staff=owner||!!(await c.env.DB.prepare("SELECT telegram_id FROM administrators WHERE telegram_id=?").bind(identity.id).first());
+    if(!staff)return c.json({error:"ACCOUNT_SUSPENDED"},403);
+   }
+  }
+ }
+ await next();
+});
 app.get("/health", c => c.json({ ok: true, service: "hostpilot-control-plane" }));
 app.get("/api/public", async c => {
   const row = await c.env.DB.prepare("SELECT value FROM settings WHERE key='setup_done'").first<{value:string}>();
