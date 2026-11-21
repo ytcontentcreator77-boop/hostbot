@@ -46,4 +46,5 @@ No HTML/static-site hosting and no SMM functionality are in scope. Customer work
 - [x] Plan-level terminal entitlement field and admin APIs; Silver, Platinum and Gold default to enabled, Free defaults to disabled.
 - [x] Admin per-user override can enable or disable access regardless of plan; `null` restores plan-based access.
 - [x] Mini App only shows the Terminal tab when entitlement is granted; Termux/OpenSSH setup guidance is shown.
-- [ ] Secure per-project SSH key issuance, restricted SSH accounts/commands, revocation and audit trail; interactive terminal sessions must be isolated and resource-limited before launch.
+- [x] Experimental per-project SSH public-key registration/revocation, node-side key sync, and SSH2 gateway restricted to a single assigned project container; no host shell, SSH exec request or SFTP subsystem.
+- [ ] Real-VPS SSH integration/security testing, project-level egress isolation, disk quotas, session audit trail, production key rotation and hostile-workload sandbox certification.
