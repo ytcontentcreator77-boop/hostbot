@@ -210,7 +210,7 @@ app.post("/api/projects/:id/files/upload/:upload_id/complete",async c=>{
  let metadata:any={};try{metadata=JSON.parse(upload.detected_json||"{}");}catch{}
  if(metadata.kind!=="file"||typeof metadata.path!=="string")return c.json({error:"UPLOAD_METADATA_INVALID"},400);
  let resources:any={};try{resources=JSON.parse(project.resource_limits_json||"{}");}catch{}
- const taskId=crypto.randomUUID(),payload={upload_id:upload.id,file_upload:true,path:metadata.path,max_file_bytes:Number(plan.max_file_bytes),max_files:Number(plan.max_files||resources.max_files||100),storage_mb:Number(plan.storage_mb||resources.storage_mb||512)};
+ const taskId=crypto.randomUUID(),payload={upload_id:upload.id,file_upload:true,control_action:"file_upload",path:metadata.path,max_file_bytes:Number(plan.max_file_bytes),max_files:Number(plan.max_files||resources.max_files||100),storage_mb:Number(plan.storage_mb||resources.storage_mb||512)};
  await c.env.DB.batch([
   c.env.DB.prepare("UPDATE project_uploads SET status='queued' WHERE id=? AND status='receiving'").bind(upload.id),
   c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'restart',?)").bind(taskId,project.server_id,project.id,JSON.stringify(payload))
