@@ -184,11 +184,12 @@ async function extractProjectZip(archive:Buffer,id:string,runtime:string){
  const filesFound=extracted.sort();const manifests=filesFound.filter(x=>["requirements.txt","pyproject.toml","Pipfile","package.json","package-lock.json","pnpm-lock.yaml","yarn.lock"].includes(x.split("/").pop()||""));
  let entry="",startup="",runtime="python";
  const packagePath=runtime==="nodejs"?(filesFound.includes("package.json")?"package.json":filesFound.find(x=>x.endsWith("/package.json"))):undefined;
- if(packagePath){
-  runtime="nodejs";const packageData=JSON.parse(await readFile(resolve(root,packagePath),"utf8"));const base=packagePath.includes("/")?packagePath.slice(0,packagePath.lastIndexOf("/"))+"/":"";
-  const hasStart=typeof packageData.scripts?.start==="string";entry=base+(typeof packageData.main==="string"?packageData.main:["index.js","main.js","app.js","server.js","src/index.js"].find(x=>filesFound.includes(base+x))||"");
-  if(!entry||!filesFound.includes(entry))throw new Error("NODE_ENTRY_FILE_NOT_FOUND");
-  startup="cd "+shellQuote("/workspace/"+base)+" && npm install --omit=dev --no-audit --no-fund && "+(hasStart?"npm start":"node "+shellQuote("/workspace/"+entry));
+ if(runtime==="nodejs"){
+  const packageData=packagePath?JSON.parse(await readFile(resolve(root,packagePath),"utf8")):{};const base=packagePath&&packagePath.includes("/")?packagePath.slice(0,packagePath.lastIndexOf("/"))+"/":"";
+  const hasStart=typeof packageData.scripts?.start==="string";const declared=typeof packageData.main==="string"?base+packageData.main:"";
+  entry=declared&&filesFound.includes(declared)?declared:(["index.js","main.js","app.js","server.js","src/index.js"].map(x=>base+x).find(x=>filesFound.includes(x))||"");
+  if(!entry&&!hasStart)throw new Error("NODE_ENTRY_FILE_NOT_FOUND");if(!entry)entry="package.json (scripts.start)";
+  startup=(packagePath?"cd "+shellQuote("/workspace/"+base)+" && npm install --no-audit --no-fund && ":"")+(hasStart?"npm start":"node "+shellQuote("/workspace/"+entry));
  }else{
   entry=filesFound.find(x=>["main.py","bot.py","app.py","run.py","index.py"].includes(x.split("/").pop()||""))||"";
   if(!entry)throw new Error("PYTHON_ENTRY_FILE_NOT_FOUND");
