@@ -176,12 +176,12 @@ app.post("/api/agent/tasks/:id/result",async c=>{
  if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
  const body=await c.req.json<{lease_token:string;ok:boolean;result?:unknown;error?:string}>().catch(()=>null);
  if(!body||typeof body.lease_token!=="string"||typeof body.ok!=="boolean")return c.json({error:"INVALID_RESULT"},400);
- const task=await c.env.DB.prepare("SELECT project_id,action FROM agent_tasks WHERE id=? AND server_id=? AND status='leased' AND lease_token=?").bind(c.req.param("id"),node.id,body.lease_token).first<{project_id:string|null;action:string}>();
+ const task=await c.env.DB.prepare("SELECT project_id,action,payload_json FROM agent_tasks WHERE id=? AND server_id=? AND status='leased' AND lease_token=?").bind(c.req.param("id"),node.id,body.lease_token).first<{project_id:string|null;action:string;payload_json:string}>();
  if(!task)return c.json({error:"TASK_LEASE_INVALID"},409);
  const status=body.ok?"succeeded":"failed";
  await c.env.DB.batch([
   c.env.DB.prepare("UPDATE agent_tasks SET status=?,result_json=?,error=?,lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND lease_token=?").bind(status,JSON.stringify(body.result??null).slice(0,8000),String(body.error||"").slice(0,1000)||null,c.req.param("id"),body.lease_token),
-  ...(task.project_id?[c.env.DB.prepare("UPDATE projects SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",task.project_id)]:[])
+  ...(task.project_id?[c.env.DB.prepare("UPDATE projects SET status=?,entry_file=COALESCE(?,entry_file),startup_command=COALESCE(?,startup_command),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",body.ok&&body.result&&typeof body.result==="object"?(body.result as any).entry_file||null:null,body.ok&&body.result&&typeof body.result==="object"?(body.result as any).startup_command||null:null,task.project_id)]:[]),...(task.action==="create"&&body.ok&&JSON.parse(task.payload_json||"{}").upload_id?[c.env.DB.prepare("UPDATE project_uploads SET status='deployed',detected_json=? WHERE id=?").bind(JSON.stringify(body.result||{}).slice(0,12000),(JSON.parse(task.payload_json||"{}") as any).upload_id)]:[])
  ]);
  return c.json({ok:true,status});
 });
