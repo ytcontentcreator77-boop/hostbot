@@ -582,6 +582,166 @@ app.post("/bot",async c=>{
   await fetch(`https://api.telegram.org/bot${c.env.BOT_TOKEN}/sendMessage`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(reply)});
   return c.json({ok:true});
 });
+
+const ADMIN_EXPORT_TABLES=["settings","users","plans","payment_methods","announcements","campaigns","coupons"] as const;
+app.get("/api/admin/export",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const requested=c.req.query("category")||"all";
+ const allowed=[...ADMIN_EXPORT_TABLES];
+ if(requested!=="all"&&!allowed.includes(requested as any))return c.json({error:"INVALID_EXPORT_CATEGORY",allowed:["all",...allowed]},400);
+ const tables=requested==="all"?allowed:[requested as typeof ADMIN_EXPORT_TABLES[number]];
+ const data:any={format:"hostpilot-export-v1",exported_at:new Date().toISOString(),tables:{}};
+ for(const table of tables){
+  try{const result=await c.env.DB.prepare("SELECT * FROM "+table).all();data.tables[table]=result.results||[];}
+  catch(error){return c.json({error:"EXPORT_FAILED",table,message:error instanceof Error?error.message:"DATABASE_ERROR"},500);}
+ }
+ await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)")
+  .bind(admin.id,"data.export","backup",requested,JSON.stringify({tables}),"success").run();
+ return c.json(data,{headers:{"Content-Disposition":"attachment; filename=hostpilot-"+requested+"-export.json","Cache-Control":"no-store"}});
+});
+app.post("/api/admin/import",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const body=await c.req.json<any>().catch(()=>null);
+ if(!body||body.format!=="hostpilot-export-v1"||!body.tables||typeof body.tables!=="object"||Array.isArray(body.tables))return c.json({error:"INVALID_IMPORT_FILE"},400);
+ const allowed=new Set<string>(ADMIN_EXPORT_TABLES),statements:any[]=[];let imported=0;
+ for(const [table,rows] of Object.entries(body.tables)){
+  if(!allowed.has(table)||!Array.isArray(rows))return c.json({error:"INVALID_IMPORT_TABLE",table},400);
+  if(rows.length>5000||imported+rows.length>10000)return c.json({error:"IMPORT_ROW_LIMIT"},413);
+  for(const row of rows as any[]){
+   if(!row||typeof row!=="object"||Array.isArray(row))return c.json({error:"INVALID_IMPORT_ROW",table},400);
+   const keys=Object.keys(row);
+   if(!keys.length||keys.some(key=>!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))return c.json({error:"INVALID_IMPORT_COLUMNS",table},400);
+   if(["administrators","wallet_transactions","subscriptions","projects","vps_servers","agent_tasks","backups","project_uploads","project_upload_chunks"].includes(table))return c.json({error:"IMPORT_TABLE_NOT_ALLOWED",table},400);
+   const columns=keys.map(key=>"\""+key+"\"").join(",");
+   const placeholders=keys.map(()=>"?").join(",");
+   const updates=keys.filter(key=>key!=="id"&&key!=="telegram_id"&&key!=="key").map(key=>"\""+key+"\"=excluded.\""+key+"\"").join(",");
+   const conflict=table==="users"?"telegram_id":table==="settings"?"key":table==="plans"?"id":table==="payment_methods"?"id":table==="announcements"?"id":table==="campaigns"?"id":"id";
+   const sql="INSERT INTO "+table+"("+columns+") VALUES("+placeholders+") ON CONFLICT("+conflict+") "+(updates?"DO UPDATE SET "+updates:"DO NOTHING");
+   statements.push(c.env.DB.prepare(sql).bind(...keys.map(key=>row[key]===undefined?null:row[key])));
+   imported++;
+  }
+ }
+ for(let i=0;i<statements.length;i+=50)await c.env.DB.batch(statements.slice(i,i+50));
+ await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)")
+  .bind(admin.id,"data.import","backup","json",JSON.stringify({rows:imported,tables:Object.keys(body.tables)}),"success").run();
+ return c.json({ok:true,imported_rows:imported,tables:Object.keys(body.tables)});
+});
+app.get("/api/announcements",async c=>{
+ const rows=await c.env.DB.prepare("SELECT id,title,description,image_url,button_text,button_url,button_enabled,created_at FROM announcements WHERE enabled=1 AND (starts_at IS NULL OR datetime(starts_at)<=CURRENT_TIMESTAMP) AND (ends_at IS NULL OR datetime(ends_at)>CURRENT_TIMESTAMP) ORDER BY created_at DESC LIMIT 20").all();
+ return c.json({announcements:rows.results||[]});
+});
+app.get("/api/admin/announcements",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const rows=await c.env.DB.prepare("SELECT * FROM announcements ORDER BY created_at DESC LIMIT 200").all();return c.json({announcements:rows.results||[]});
+});
+app.post("/api/admin/announcements",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);
+ if(!b||typeof b.title!=="string"||!b.title.trim()||b.title.length>160||typeof b.description!=="string"||b.description.length>4000)return c.json({error:"INVALID_ANNOUNCEMENT"},400);
+ const buttonEnabled=!!b.button_enabled,buttonText=String(b.button_text||"").trim().slice(0,40),buttonUrl=String(b.button_url||"").trim();
+ if(buttonEnabled&&(!buttonText||!/^https:\/\//i.test(buttonUrl)))return c.json({error:"BUTTON_REQUIRES_HTTPS_URL"},400);
+ const id=crypto.randomUUID();await c.env.DB.prepare("INSERT INTO announcements(id,title,description,image_url,button_text,button_url,button_enabled,enabled,starts_at,ends_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+ .bind(id,b.title.trim(),b.description,String(b.image_url||"").slice(0,1000)||null,buttonText||null,buttonUrl||null,buttonEnabled?1:0,b.enabled===false?0:1,b.starts_at||null,b.ends_at||null,admin.id).run();
+ return c.json({ok:true,id},201);
+});
+app.put("/api/admin/announcements/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);if(!b)return c.json({error:"INVALID_ANNOUNCEMENT"},400);
+ const current=await c.env.DB.prepare("SELECT id FROM announcements WHERE id=?").bind(c.req.param("id")).first();if(!current)return c.json({error:"NOT_FOUND"},404);
+ const buttonEnabled=!!b.button_enabled,buttonText=String(b.button_text||"").trim().slice(0,40),buttonUrl=String(b.button_url||"").trim();
+ if(buttonEnabled&&(!buttonText||!/^https:\/\//i.test(buttonUrl)))return c.json({error:"BUTTON_REQUIRES_HTTPS_URL"},400);
+ await c.env.DB.prepare("UPDATE announcements SET title=?,description=?,image_url=?,button_text=?,button_url=?,button_enabled=?,enabled=?,starts_at=?,ends_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+ .bind(String(b.title||"").trim().slice(0,160),String(b.description||"").slice(0,4000),String(b.image_url||"").slice(0,1000)||null,buttonText||null,buttonUrl||null,buttonEnabled?1:0,b.enabled===false?0:1,b.starts_at||null,b.ends_at||null,c.req.param("id")).run();
+ return c.json({ok:true});
+});
+app.delete("/api/admin/announcements/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ await c.env.DB.prepare("DELETE FROM announcements WHERE id=?").bind(c.req.param("id")).run();return c.json({ok:true});
+});
+app.get("/api/admin/campaigns",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const rows=await c.env.DB.prepare("SELECT * FROM campaigns ORDER BY created_at DESC LIMIT 200").all();return c.json({campaigns:rows.results||[]});
+});
+app.post("/api/admin/campaigns",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);
+ if(!b||typeof b.title!=="string"||!b.title.trim()||b.title.length>160||!["all","active","premium","free"].includes(b.audience||"all"))return c.json({error:"INVALID_CAMPAIGN"},400);
+ const id=crypto.randomUUID();await c.env.DB.prepare("INSERT INTO campaigns(id,title,description,audience,payload_json,status,scheduled_at,created_by) VALUES(?,?,?,?,?,'draft',?,?)")
+ .bind(id,b.title.trim(),String(b.description||"").slice(0,4000),b.audience||"all",JSON.stringify({image_url:b.image_url||null,button_text:b.button_text||null,button_url:b.button_url||null}),b.scheduled_at||null,admin.id).run();
+ return c.json({ok:true,id,status:"draft"},201);
+});
+app.put("/api/admin/campaigns/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);if(!b)return c.json({error:"INVALID_CAMPAIGN"},400);
+ if(!["draft","scheduled","cancelled"].includes(b.status||"draft"))return c.json({error:"INVALID_CAMPAIGN_STATUS"},400);
+ const result=await c.env.DB.prepare("UPDATE campaigns SET title=?,description=?,audience=?,payload_json=?,status=?,scheduled_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND sent_at IS NULL")
+ .bind(String(b.title||"").trim().slice(0,160),String(b.description||"").slice(0,4000),["all","active","premium","free"].includes(b.audience)?b.audience:"all",JSON.stringify(b.payload||{}),b.status||"draft",b.scheduled_at||null,c.req.param("id")).run();
+ return c.json(result.meta.changes?{ok:true}:{error:"CAMPAIGN_NOT_FOUND_OR_SENT"},result.meta.changes?200:404);
+});
+app.delete("/api/admin/campaigns/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ await c.env.DB.prepare("DELETE FROM campaigns WHERE id=? AND sent_at IS NULL").bind(c.req.param("id")).run();return c.json({ok:true});
+});
+app.get("/api/admin/coupons",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const rows=await c.env.DB.prepare("SELECT * FROM coupons ORDER BY created_at DESC LIMIT 300").all();return c.json({coupons:rows.results||[]});
+});
+app.post("/api/admin/coupons",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);const code=String(b?.code||"").trim().toUpperCase();
+ if(!b||!/^[A-Z0-9_-]{3,32}$/.test(code)||!["percent","fixed"].includes(b.discount_type)||!Number.isSafeInteger(b.discount_value)||b.discount_value<1||(b.discount_type==="percent"&&b.discount_value>100))return c.json({error:"INVALID_COUPON"},400);
+ const id=crypto.randomUUID();try{await c.env.DB.prepare("INSERT INTO coupons(id,code,discount_type,discount_value,currency,max_redemptions,starts_at,expires_at,enabled,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)")
+ .bind(id,code,b.discount_type,b.discount_value,b.currency==="INR"?"INR":"USD",Number.isSafeInteger(b.max_redemptions)&&b.max_redemptions>0?b.max_redemptions:null,b.starts_at||null,b.expires_at||null,b.enabled===false?0:1,admin.id).run();}
+ catch{return c.json({error:"COUPON_CODE_ALREADY_EXISTS"},409);}return c.json({ok:true,id},201);
+});
+app.put("/api/admin/coupons/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);if(!b)return c.json({error:"INVALID_COUPON"},400);
+ const enabled=b.enabled===false?0:1;const result=await c.env.DB.prepare("UPDATE coupons SET enabled=? WHERE id=?").bind(enabled,c.req.param("id")).run();
+ return c.json(result.meta.changes?{ok:true}:{error:"COUPON_NOT_FOUND"},result.meta.changes?200:404);
+});
+app.get("/api/admin/payment-methods",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const rows=await c.env.DB.prepare("SELECT * FROM payment_methods ORDER BY sort_order,id").all();return c.json({methods:rows.results||[]});
+});
+app.post("/api/admin/payment-methods",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);
+ if(!b||typeof b.name!=="string"||!b.name.trim()||b.name.length>80||typeof b.kind!=="string"||!b.kind.trim()||typeof b.currency!=="string"||!Number.isSafeInteger(b.min_amount_minor)||b.min_amount_minor<0)return c.json({error:"INVALID_PAYMENT_METHOD"},400);
+ try{const r=await c.env.DB.prepare("INSERT INTO payment_methods(name,kind,instructions,min_amount_minor,max_amount_minor,currency,enabled,sort_order) VALUES(?,?,?,?,?,?,?,?)")
+ .bind(b.name.trim(),b.kind.trim().slice(0,40),String(b.instructions||"").slice(0,2000),b.min_amount_minor,Number.isSafeInteger(b.max_amount_minor)&&b.max_amount_minor>0?b.max_amount_minor:null,b.currency==="INR"?"INR":"USD",b.enabled===false?0:1,Number.isSafeInteger(b.sort_order)?b.sort_order:0).run();
+ return c.json({ok:true,id:r.meta.last_row_id},201);}catch{return c.json({error:"PAYMENT_METHOD_CREATE_FAILED"},400);}
+});
+app.put("/api/admin/payment-methods/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);if(!b)return c.json({error:"INVALID_PAYMENT_METHOD"},400);
+ const r=await c.env.DB.prepare("UPDATE payment_methods SET name=?,kind=?,instructions=?,min_amount_minor=?,max_amount_minor=?,currency=?,enabled=?,sort_order=? WHERE id=?")
+ .bind(String(b.name||"").trim().slice(0,80),String(b.kind||"").trim().slice(0,40),String(b.instructions||"").slice(0,2000),Math.max(0,Number(b.min_amount_minor||0)),Number.isSafeInteger(b.max_amount_minor)&&b.max_amount_minor>0?b.max_amount_minor:null,b.currency==="INR"?"INR":"USD",b.enabled===false?0:1,Number(b.sort_order||0),Number(c.req.param("id"))).run();
+ return c.json(r.meta.changes?{ok:true}:{error:"PAYMENT_METHOD_NOT_FOUND"},r.meta.changes?200:404);
+});
+app.delete("/api/admin/payment-methods/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const r=await c.env.DB.prepare("UPDATE payment_methods SET enabled=0 WHERE id=?").bind(Number(c.req.param("id"))).run();return c.json({ok:true,disabled:!!r.meta.changes});
+});
+app.get("/api/admin/payments",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const status=c.req.query("status");const rows=status?await c.env.DB.prepare("SELECT pr.*,u.telegram_id,u.username,u.first_name,pm.name AS method_name FROM payment_requests pr JOIN users u ON u.id=pr.user_id LEFT JOIN payment_methods pm ON pm.id=pr.method_id WHERE pr.status=? ORDER BY pr.created_at DESC LIMIT 300").bind(status).all():await c.env.DB.prepare("SELECT pr.*,u.telegram_id,u.username,u.first_name,pm.name AS method_name FROM payment_requests pr JOIN users u ON u.id=pr.user_id LEFT JOIN payment_methods pm ON pm.id=pr.method_id ORDER BY pr.created_at DESC LIMIT 300").all();
+ return c.json({payments:rows.results||[]});
+});
+app.get("/api/admin/plans",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const rows=await c.env.DB.prepare("SELECT * FROM plans ORDER BY sort_order,id").all();return c.json({plans:rows.results||[]});
+});
+app.put("/api/admin/plans/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const b=await c.req.json<any>().catch(()=>null);if(!b)return c.json({error:"INVALID_PLAN"},400);
+ const fields=["price_minor","duration_days","max_projects","max_upload_bytes","max_file_bytes","max_files","cpu_millicores","ram_mb","storage_mb"];
+ if(fields.some(k=>!Number.isSafeInteger(b[k])||b[k]<0)||b.duration_days<1||b.max_projects<1||b.max_files<1)return c.json({error:"INVALID_PLAN_LIMITS"},400);
+ const r=await c.env.DB.prepare("UPDATE plans SET name=?,description=?,badge=?,price_minor=?,currency=?,duration_days=?,max_projects=?,max_upload_bytes=?,max_file_bytes=?,max_files=?,cpu_millicores=?,ram_mb=?,storage_mb=?,enabled=? WHERE id=?")
+ .bind(String(b.name||"").trim().slice(0,80),String(b.description||"").slice(0,1000),String(b.badge||"").slice(0,40),b.price_minor,b.currency==="INR"?"INR":"USD",b.duration_days,b.max_projects,b.max_upload_bytes,b.max_file_bytes,b.max_files,b.cpu_millicores,b.ram_mb,b.storage_mb,b.enabled===false?0:1,Number(c.req.param("id"))).run();
+ return c.json(r.meta.changes?{ok:true}:{error:"PLAN_NOT_FOUND"},r.meta.changes?200:404);
+});
+
 app.all("/api/*",c=>c.json({error:"NOT_IMPLEMENTED",message:"This endpoint is not implemented yet."},501));
 app.get("*",c=>c.env.ASSETS.fetch(c.req.raw));
 async function runBackupRetention(db:D1Database){
