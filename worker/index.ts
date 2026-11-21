@@ -128,7 +128,7 @@ app.post("/api/projects",async c=>{
 app.post("/api/projects/:id/upload",async c=>{
  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
  const projectId=c.req.param("id");if(!/^[a-f0-9-]{36}$/i.test(projectId))return c.json({error:"INVALID_PROJECT_ID"},400);
- const project=await c.env.DB.prepare("SELECT p.id,p.server_id,p.runtime,p.runtime_version,p.user_id,p.resource_limits_json FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(projectId,user.id).first<{id:string;server_id:number;runtime:string;runtime_version:string;user_id:number}>();
+ const project=await c.env.DB.prepare("SELECT p.id,p.server_id,p.runtime,p.runtime_version,p.user_id,p.resource_limits_json FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(projectId,user.id).first<{id:string;server_id:number;runtime:string;runtime_version:string;user_id:number;resource_limits_json:string}>();
  if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
  const plan=await c.env.DB.prepare("SELECT p.max_upload_bytes FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.id DESC LIMIT 1").bind(project.user_id).first<{max_upload_bytes:number}>();
  if(!plan)return c.json({error:"ACTIVE_PLAN_REQUIRED"},403);
@@ -138,7 +138,7 @@ app.post("/api/projects/:id/upload",async c=>{
  const bytes=new Uint8Array(await file.arrayBuffer());if(bytes[0]!==0x50||bytes[1]!==0x4b||![0x03,0x05,0x07].includes(bytes[2]))return c.json({error:"INVALID_ZIP_ARCHIVE"},400);
  const uploadId=crypto.randomUUID();const chunkSize=256*1024;const chunkCount=Math.ceil(bytes.length/chunkSize);const cleanName=file.name.replace(/[^A-Za-z0-9._-]/g,"_").slice(0,120)||"project.zip";
  const statements=[c.env.DB.prepare("INSERT INTO project_uploads(id,project_id,user_id,filename,size_bytes,chunk_count,status) VALUES(?,?,?,?,?,?,'queued')").bind(uploadId,projectId,project.user_id,cleanName,bytes.length,chunkCount)];
- for(let i=0;i<chunkCount;i++){const chunk=bytes.slice(i*chunkSize,Math.min(bytes.length,(i+1)*chunkSize));statements.push(c.env.DB.prepare("INSERT INTO project_upload_chunks(upload_id,chunk_index,chunk_data) VALUES(?,?,?)").bind(uploadId,i,chunk.buffer));}
+ for(let i=0;i<chunkCount;i++){const chunk=bytes.slice(i*chunkSize,Math.min(bytes.length,(i+1)*chunkSize));statements.push(c.env.DB.prepare("INSERT INTO project_upload_chunks(upload_id,chunk_index,chunk_data) VALUES(?,?,?)").bind(uploadId,i,chunk.buffer.slice(chunk.byteOffset,chunk.byteOffset+chunk.byteLength)));}
  await c.env.DB.batch(statements);const taskId=crypto.randomUUID();let resources:any={};try{resources=JSON.parse(project.resource_limits_json||"{}");}catch{}const payload={upload_id:uploadId,runtime:project.runtime,version:project.runtime_version,cpu_millicores:resources.cpu_millicores||500,ram_mb:resources.ram_mb||512,pids_limit:128};
  await c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'create',?)").bind(taskId,project.server_id,projectId,JSON.stringify(payload)).run();
  return c.json({ok:true,upload_id:uploadId,task_id:taskId,size_bytes:bytes.length,status:"queued"},202);
