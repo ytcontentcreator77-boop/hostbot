@@ -18,3 +18,11 @@ BEGIN
   UPDATE wallets SET balance_minor = balance_minor + CASE WHEN NEW.direction='credit' THEN NEW.amount_minor ELSE -NEW.amount_minor END
   WHERE user_id=NEW.user_id AND currency=NEW.currency;
 END;
+
+CREATE TRIGGER IF NOT EXISTS wallet_tx_approve_payment
+AFTER INSERT ON wallet_transactions
+WHEN NEW.reference_type='payment'
+BEGIN
+  UPDATE payment_requests SET status='approved',reviewed_at=CURRENT_TIMESTAMP
+  WHERE id=NEW.reference_id AND status='pending';
+END;
