@@ -13,7 +13,7 @@ Telegram-based Python and Node.js cloud hosting control plane.
 **No Cloudflare R2 is used.** No HTML/static-site hosting or SMM features are included.
 
 ## Current development status
-The repository contains a customer Mini App, Worker APIs, D1 migrations, wallet-ledger foundations, admin user/VPS controls, a provider-neutral VPS agent, project file management and plan-limited chunked individual-file uploads (up to the configured 500 MB per-file ceiling). Large-file downloads, full payment workflows, backups, advanced admin modules and production security certification remain incomplete. It is not production-ready. See [the roadmap](docs/ROADMAP.md) and [deployment guide](docs/DEPLOYMENT.md).
+The repository contains a customer Mini App, Worker APIs, D1 migrations, wallet-ledger foundations, admin user/VPS controls, a provider-neutral VPS agent, project file management and plan-limited chunked individual-file uploads (up to the configured 500 MB per-file ceiling). Large-file downloads, full payment workflows, automated backup retention/export, advanced admin modules and production security certification remain incomplete. The Admin Panel now includes a VPS backup inventory and audited restore queue. It is not production-ready. See [the roadmap](docs/ROADMAP.md) and [deployment guide](docs/DEPLOYMENT.md).
 
 ## Quick start
 1. Install Node.js 24+ and run `npm install`.
