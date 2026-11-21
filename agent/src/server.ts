@@ -80,6 +80,7 @@ const terminalKeys=new Map<string,Set<string>>();
 const terminalProjects=new Map<string,string>();
 const activeSessions=new Map<string,Set<any>>();
 let terminalKeysLastSync=0;
+function closeStaleTerminalSessions(){if(Date.now()-terminalKeysLastSync>45000){for(const sessions of activeSessions.values())for(const session of sessions)session.end("HostPilot terminal authorization sync is unavailable.");}}
 async function loadSshHostKey(){
  await mkdir(resolve(SSH_HOST_KEY,".."),{recursive:true,mode:0o700});
  try{return await readFile(SSH_HOST_KEY,"utf8");}catch{}
@@ -114,17 +115,17 @@ async function startTerminalGateway(){
     session.on("shell",(accept:any,reject:any)=>{
      if(!hasPty){reject();return;}
      const sessions=activeSessions.get(authenticatedUser)||new Set<any>();if(sessions.size>=3){reject();return;}
-     const channel=accept();let terminalStream:any;channel.on("close",()=>{if(terminalStream)terminalStream.destroy();sessions.delete(channel);if(!sessions.size)activeSessions.delete(authenticatedUser);});sessions.add(channel);activeSessions.set(authenticatedUser,sessions);
+     const channel=accept();let terminalStream:any,idle:any,maxLife:any;channel.on("close",()=>{clearTimeout(idle);clearTimeout(maxLife);if(terminalStream)terminalStream.destroy();sessions.delete(channel);if(!sessions.size)activeSessions.delete(authenticatedUser);});sessions.add(channel);activeSessions.set(authenticatedUser,sessions);
      const projectId=terminalProjects.get(authenticatedUser)||"";
      void (async()=>{
       try{const container=await getContainer(projectId);const info=await container.inspect();if(!info.State.Running){channel.stderr.write("HostPilot: project is stopped. Start it from the Mini App first.\\r\\n");channel.end();return;}
        const exec=await container.exec({Cmd:["/bin/sh"],User:"0:0",WorkingDir:"/workspace",Env:["HOME=/workspace","TERM=xterm-256color"],AttachStdin:true,AttachStdout:true,AttachStderr:true,Tty:true});
        terminalStream=await exec.start({hijack:true,stdin:true});channel.pipe(terminalStream);terminalStream.pipe(channel);
        session.on("window-change",(size:any)=>{void exec.resize({h:size.rows,w:size.cols}).catch(()=>undefined);});
-       let idle:any=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();
+       idle=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();maxLife=setTimeout(()=>channel.end("HostPilot terminal maximum session duration reached."),4*60*60*1000);maxLife.unref?.();
        const resetIdle=()=>{clearTimeout(idle);idle=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();};
        channel.on("data",resetIdle);terminalStream.on("data",resetIdle);
-       channel.on("close",()=>clearTimeout(idle));
+       
       }catch{channel.stderr.write("HostPilot: unable to open this project container.\\r\\n");channel.end();sessions.delete(channel);if(!sessions.size)activeSessions.delete(authenticatedUser);}
      })();
     });
@@ -135,7 +136,7 @@ async function startTerminalGateway(){
  });
  await refreshTerminalKeys().catch(error=>process.stderr.write("Terminal key sync failed: "+String(error)+"\\n"));
  ssh.listen(SSH_PORT,SSH_BIND,()=>process.stdout.write("HostPilot project SSH gateway listening on "+SSH_BIND+":"+SSH_PORT+"\\n"));
- setInterval(()=>void refreshTerminalKeys().catch(error=>process.stderr.write("Terminal key sync failed: "+String(error)+"\\n")),15000).unref();
+ setInterval(()=>void refreshTerminalKeys().catch(error=>{closeStaleTerminalSessions();process.stderr.write("Terminal key sync failed: "+String(error)+"\\n");}),15000).unref();
 }
 const CONTROL_PLANE_URL=(process.env.CONTROL_PLANE_URL||"").replace(/\/$/,"");
 const NODE_TOKEN=process.env.NODE_TOKEN||"";
