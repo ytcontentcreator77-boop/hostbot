@@ -98,7 +98,7 @@ app.post("/api/agent/heartbeat",async c=>{
 
 app.get("/api/projects",async c=>{
  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
- const rows=await c.env.DB.prepare("SELECT p.id,p.name,p.runtime,p.runtime_version,p.status,p.created_at,v.name AS server_name FROM projects p JOIN users u ON u.id=p.user_id LEFT JOIN vps_servers v ON v.id=p.server_id WHERE u.telegram_id=? AND p.deleted_at IS NULL ORDER BY p.created_at DESC").bind(user.id).all();
+ const rows=await c.env.DB.prepare("SELECT p.id,p.name,p.runtime,p.runtime_version,p.status,p.entry_file,p.created_at,v.name AS server_name FROM projects p JOIN users u ON u.id=p.user_id LEFT JOIN vps_servers v ON v.id=p.server_id WHERE u.telegram_id=? AND p.deleted_at IS NULL ORDER BY p.created_at DESC").bind(user.id).all();
  return c.json({projects:rows.results||[]});
 });
 app.post("/api/projects",async c=>{
