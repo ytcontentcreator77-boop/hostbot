@@ -666,9 +666,10 @@ app.post("/api/admin/campaigns",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
  const b=await c.req.json<any>().catch(()=>null);
  if(!b||typeof b.title!=="string"||!b.title.trim()||b.title.length>160||!["all","active","premium","free"].includes(b.audience||"all"))return c.json({error:"INVALID_CAMPAIGN"},400);
- const id=crypto.randomUUID();await c.env.DB.prepare("INSERT INTO campaigns(id,title,description,audience,payload_json,status,scheduled_at,created_by) VALUES(?,?,?,?,?,'draft',?,?)")
- .bind(id,b.title.trim(),String(b.description||"").slice(0,4000),b.audience||"all",JSON.stringify({image_url:b.image_url||null,button_text:b.button_text||null,button_url:b.button_url||null}),b.scheduled_at||null,admin.id).run();
- return c.json({ok:true,id,status:"draft"},201);
+ const scheduledAt=String(b.scheduled_at||"").trim()||null;if(scheduledAt&&Number.isNaN(Date.parse(scheduledAt)))return c.json({error:"INVALID_SCHEDULE_TIME"},400);
+ const id=crypto.randomUUID(),status=scheduledAt?"scheduled":"draft";await c.env.DB.prepare("INSERT INTO campaigns(id,title,description,audience,payload_json,status,scheduled_at,created_by) VALUES(?,?,?,?,?,?,?,?)")
+ .bind(id,b.title.trim(),String(b.description||"").slice(0,4000),b.audience||"all",JSON.stringify({image_url:b.image_url||null,button_text:b.button_text||null,button_url:b.button_url||null}),status,scheduledAt,admin.id).run();
+ return c.json({ok:true,id,status},201);
 });
 app.put("/api/admin/campaigns/:id",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
