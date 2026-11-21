@@ -109,7 +109,7 @@ app.post("/api/admin/servers",async c=>{
   const endpoint=String(body.endpoint||"").trim();
   if(endpoint&&!endpoint.startsWith("https://"))return c.json({error:"ENDPOINT_MUST_USE_HTTPS"},400);
   const sshHost=String(body.ssh_host||"").trim().slice(0,253)||null;const sshPort=body.ssh_port===undefined?2222:Number(body.ssh_port);
-  if(sshHost&&!/^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])$/.test(sshHost))return c.json({error:"INVALID_SSH_HOST"},400);
+  if(sshHost&&!/^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])$/.test(sshHost))return c.json({error:"INVALID_SSH_HOST"},400);
   if(!Number.isInteger(sshPort)||sshPort<1||sshPort>65535)return c.json({error:"INVALID_SSH_PORT"},400);
   const token=crypto.randomUUID().replace(/-/g,"")+crypto.randomUUID().replace(/-/g,"");
   const hash=await sha256Hex(token);
