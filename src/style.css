@@ -13,3 +13,5 @@
 @media(max-width:420px){.projects-hero{padding:17px}.hero-orbit{width:58px;height:58px;border-radius:18px}.resource-grid{grid-template-columns:1fr}.file-row{gap:5px}.file-row .outline-button,.file-row .danger-button{padding:7px;font-size:10px}}
 
 .upload-progress{padding:12px 0 4px}.progress-track{height:7px;background:#26364e;border-radius:20px;overflow:hidden;margin-top:9px}.progress-track span{display:block;height:100%;background:linear-gradient(90deg,#55d6be,#438df5);border-radius:20px;transition:width .15s ease}
+
+.backup-status{font-size:11px;color:#91a2ba}
