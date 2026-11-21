@@ -719,6 +719,10 @@ app.put("/api/admin/coupons/:id",async c=>{
  const enabled=b.enabled===false?0:1;const result=await c.env.DB.prepare("UPDATE coupons SET enabled=? WHERE id=?").bind(enabled,c.req.param("id")).run();
  return c.json(result.meta.changes?{ok:true}:{error:"COUPON_NOT_FOUND"},result.meta.changes?200:404);
 });
+app.delete("/api/admin/coupons/:id",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const r=await c.env.DB.prepare("DELETE FROM coupons WHERE id=?").bind(c.req.param("id")).run();return c.json({ok:true,deleted:!!r.meta.changes});
+});
 app.get("/api/admin/payment-methods",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
  const rows=await c.env.DB.prepare("SELECT * FROM payment_methods ORDER BY sort_order,id").all();return c.json({methods:rows.results||[]});
