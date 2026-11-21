@@ -2,6 +2,7 @@ import http from "node:http";
 import { createHash, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
+import os from "node:os";
 import Docker from "dockerode";
 
 const PORT=Number(process.env.PORT||8788);
@@ -71,4 +72,25 @@ const server=http.createServer(async(req,res)=>{
   await container.start();reply(res,200,{id,status:"running",container:name,image});
  }catch(error){reply(res,400,{error:error instanceof Error?error.message:"AGENT_ERROR"});}
 });
-server.listen(PORT,"127.0.0.1",()=>{if(!SECRET)process.stderr.write("HOSTPILOT_AGENT_SECRET is required; signed actions will be rejected.\n");process.stdout.write("HostPilot agent listening on 127.0.0.1:"+PORT+"\n");});
+const CONTROL_PLANE_URL=(process.env.CONTROL_PLANE_URL||"").replace(/\\/$/,"");
+const NODE_TOKEN=process.env.NODE_TOKEN||"";
+async function sendHeartbeat(){
+ if(!CONTROL_PLANE_URL||!NODE_TOKEN)return;
+ try{
+  const response=await fetch(CONTROL_PLANE_URL+"/api/agent/heartbeat",{
+   method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+NODE_TOKEN},
+   body:JSON.stringify({agent_version:"0.2.0",status:"healthy",capacity:{
+    platform:os.platform(),architecture:os.arch(),cpu_cores:os.cpus().length,
+    memory_total_mb:Math.floor(os.totalmem()/1048576),memory_free_mb:Math.floor(os.freemem()/1048576),
+    node_version:process.version
+   }})
+  });
+  if(!response.ok)process.stderr.write("HostPilot heartbeat rejected: "+response.status+"\\n");
+ }catch(error){process.stderr.write("HostPilot heartbeat failed: "+(error instanceof Error?error.message:"network error")+"\\n");}
+}
+server.listen(PORT,"127.0.0.1",()=>{
+ if(!SECRET)process.stderr.write("HOSTPILOT_AGENT_SECRET is required; signed actions will be rejected.\\n");
+ process.stdout.write("HostPilot agent listening on 127.0.0.1:"+PORT+"\\n");
+ if(!CONTROL_PLANE_URL||!NODE_TOKEN)process.stderr.write("Set CONTROL_PLANE_URL and NODE_TOKEN to connect this VPS to HostPilot.\\n");
+ else {void sendHeartbeat();setInterval(()=>void sendHeartbeat(),30000);}
+});
