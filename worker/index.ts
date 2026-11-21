@@ -112,8 +112,8 @@ app.post("/api/admin/servers",async c=>{
   if(!Number.isInteger(sshPort)||sshPort<1||sshPort>65535)return c.json({error:"INVALID_SSH_PORT"},400);
   const token=crypto.randomUUID().replace(/-/g,"")+crypto.randomUUID().replace(/-/g,"");
   const hash=await sha256Hex(token);
-  const result=await c.env.DB.prepare("INSERT INTO vps_servers(name,provider,region,endpoint,status,capacity_json,agent_token_hash,enabled) VALUES(?,?,?,?,'pending','{}',?,1)")
-    .bind(body.name.trim(),provider,region,endpoint,hash).run();
+  const result=await c.env.DB.prepare("INSERT INTO vps_servers(name,provider,region,endpoint,ssh_host,ssh_port,status,capacity_json,agent_token_hash,enabled) VALUES(?,?,?,?,?,?,?,?,?,?)")
+    .bind(body.name.trim(),provider,region,endpoint,sshHost,sshPort,"pending","{}",hash,1).run();
   const serverId=Number(result.meta.last_row_id);
   await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)")
     .bind(admin.id,"server.register","vps_server",String(serverId),JSON.stringify({name:body.name,provider,region}),"success").run();
