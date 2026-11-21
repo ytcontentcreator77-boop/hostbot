@@ -109,7 +109,7 @@ app.post("/api/projects",async c=>{
  if(!versions[body.runtime].includes(body.version))return c.json({error:"UNSUPPORTED_RUNTIME_VERSION"},400);
  const account=await c.env.DB.prepare("SELECT id FROM users WHERE telegram_id=? AND status='active'").bind(user.id).first<{id:number}>();
  if(!account)return c.json({error:"USER_NOT_FOUND"},404);
- const plan=await c.env.DB.prepare("SELECT p.id,p.max_projects,p.cpu_millicores,p.ram_mb,p.storage_mb,p.allowed_runtimes,p.allowed_versions FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.id DESC LIMIT 1").bind(account.id).first<{id:number;max_projects:number;cpu_millicores:number;ram_mb:number;storage_mb:number;allowed_runtimes:string;allowed_versions:string}>();
+ const plan=await c.env.DB.prepare("SELECT p.id,p.max_projects,p.max_files,p.max_upload_bytes,p.cpu_millicores,p.ram_mb,p.storage_mb,p.allowed_runtimes,p.allowed_versions FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.id DESC LIMIT 1").bind(account.id).first<{id:number;max_projects:number;max_files:number;max_upload_bytes:number;cpu_millicores:number;ram_mb:number;storage_mb:number;allowed_runtimes:string;allowed_versions:string}>();
  if(!plan)return c.json({error:"ACTIVE_PLAN_REQUIRED"},403);
  let allowedRuntimes:string[];try{allowedRuntimes=JSON.parse(plan.allowed_runtimes);}catch{allowedRuntimes=["python","nodejs"];}
  if(!allowedRuntimes.includes(body.runtime))return c.json({error:"RUNTIME_NOT_INCLUDED"},403);
@@ -120,7 +120,7 @@ app.post("/api/projects",async c=>{
  const id=crypto.randomUUID();const taskId=crypto.randomUUID();
  const payload={runtime:body.runtime,version:body.version,startup_command:"sleep infinity",cpu_millicores:Math.min(Math.max(plan.cpu_millicores,100),4000),ram_mb:Math.min(Math.max(plan.ram_mb,128),8192),pids_limit:128};
  await c.env.DB.batch([
-  c.env.DB.prepare("INSERT INTO projects(id,user_id,server_id,name,runtime,runtime_version,status,startup_command,resource_limits_json) VALUES(?,?,?,?,?,?,'queued',?,?)").bind(id,account.id,server.id,body.name.trim(),body.runtime,body.version,payload.startup_command,JSON.stringify({cpu_millicores:payload.cpu_millicores,ram_mb:payload.ram_mb,storage_mb:plan.storage_mb})),
+  c.env.DB.prepare("INSERT INTO projects(id,user_id,server_id,name,runtime,runtime_version,status,startup_command,resource_limits_json) VALUES(?,?,?,?,?,?,'queued',?,?)").bind(id,account.id,server.id,body.name.trim(),body.runtime,body.version,payload.startup_command,JSON.stringify({cpu_millicores:payload.cpu_millicores,ram_mb:payload.ram_mb,storage_mb:plan.storage_mb,max_files:plan.max_files,max_upload_bytes:plan.max_upload_bytes})),
   c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'create',?)").bind(taskId,server.id,id,JSON.stringify(payload))
  ]);
  return c.json({ok:true,project:{id,name:body.name.trim(),runtime:body.runtime,version:body.version,status:"queued"},task_id:taskId},202);
@@ -290,6 +290,24 @@ app.get("/api/terminal/access",async c=>{
   const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);
   if(!user)return c.json({error:"UNAUTHORIZED"},401);
   return c.json(await terminalEntitlement(c.env.DB,user.id));
+});
+
+app.get("/api/admin/plans/resources",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const rows=await c.env.DB.prepare("SELECT id,name,slug,max_projects,max_files,max_upload_bytes,cpu_millicores,ram_mb,storage_mb,terminal_enabled FROM plans ORDER BY sort_order,id").all();
+ return c.json({plans:rows.results||[]});
+});
+app.put("/api/admin/plans/:id/resources",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const id=Number(c.req.param("id"));const body=await c.req.json<any>().catch(()=>null);
+ const fields=["max_projects","max_files","max_upload_bytes","cpu_millicores","ram_mb","storage_mb"];
+ if(!Number.isSafeInteger(id)||id<1||!body||fields.some(key=>!Number.isSafeInteger(body[key])))return c.json({error:"INVALID_RESOURCE_LIMITS"},400);
+ const ranges:any={max_projects:[1,100],max_files:[1,10000],max_upload_bytes:[1024,20*1024*1024],cpu_millicores:[100,4000],ram_mb:[128,8192],storage_mb:[128,1048576]};
+ for(const key of fields)if(body[key]<ranges[key][0]||body[key]>ranges[key][1])return c.json({error:"RESOURCE_LIMIT_OUT_OF_RANGE",field:key},400);
+ const result=await c.env.DB.prepare("UPDATE plans SET max_projects=?,max_files=?,max_upload_bytes=?,cpu_millicores=?,ram_mb=?,storage_mb=? WHERE id=?").bind(body.max_projects,body.max_files,body.max_upload_bytes,body.cpu_millicores,body.ram_mb,body.storage_mb,id).run();
+ if(!result.meta.changes)return c.json({error:"PLAN_NOT_FOUND"},404);
+ await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)").bind(admin.id,"plan.resource_limits","plan",String(id),JSON.stringify(body),"success").run();
+ return c.json({ok:true,plan_id:id,limits:body});
 });
 app.get("/api/admin/terminal/plans",async c=>{
   const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
