@@ -192,7 +192,7 @@ async function extractProjectZip(archive:Buffer,id:string,runtime:string){
  }else{
   entry=filesFound.find(x=>["main.py","bot.py","app.py","run.py","index.py"].includes(x.split("/").pop()||""))||"";
   if(!entry)throw new Error("PYTHON_ENTRY_FILE_NOT_FOUND");
-  const req=filesFound.includes("requirements.txt")?"python -m pip install --disable-pip-version-check --target=/workspace/.hostpilot/python-deps -r /workspace/requirements.txt && PYTHONPATH=/workspace/.hostpilot/python-deps ":"";
+  const req=filesFound.includes("requirements.txt")?"python -m pip install --disable-pip-version-check --target=/workspace/.hostpilot/python-deps -r /workspace/requirements.txt && PYTHONPATH=/workspace/.hostpilot/python-deps ":filesFound.includes("pyproject.toml")?"python -m pip install --disable-pip-version-check --target=/workspace/.hostpilot/python-deps . && PYTHONPATH=/workspace/.hostpilot/python-deps ":"";
   startup=req+"python "+shellQuote("/workspace/"+entry);
  }
  return {entry_file:entry,startup_command:startup,files:filesFound.slice(0,200),manifests,runtime};
