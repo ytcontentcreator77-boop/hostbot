@@ -170,6 +170,19 @@ app.get("/api/projects/:id/tasks/:task_id",async c=>{
 });
 
 
+app.post("/api/projects/:id/github-backup",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const body=await c.req.json<{repository:string;branch?:string;action?:"backup"|"restore"}>().catch(()=>null);
+ const repository=String(body?.repository||"").trim(),branch=String(body?.branch||"hostpilot-backup").trim(),action=body?.action==="restore"?"github_restore":"github_backup";
+ if(!body||!/^[A-Za-z0-9_.-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(repository)||!/^[-A-Za-z0-9._/]{1,100}$/.test(branch)||branch.includes(".."))return c.json({error:"INVALID_GITHUB_REPOSITORY_OR_BRANCH"},400);
+ const project=await c.env.DB.prepare("SELECT p.id,p.server_id FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),user.id).first<any>();
+ if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
+ const pending=await c.env.DB.prepare("SELECT id FROM agent_tasks WHERE project_id=? AND status IN ('queued','leased') LIMIT 1").bind(project.id).first();
+ if(pending)return c.json({error:"PROJECT_TASK_IN_PROGRESS"},409);
+ const taskId=crypto.randomUUID();
+ await c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'restart',?)").bind(taskId,project.server_id,project.id,JSON.stringify({control_action:action,repository,branch})).run();
+ return c.json({ok:true,task_id:taskId,status:"queued",repository,branch,action},202);
+});
 app.get("/api/projects/:id/backups",async c=>{
  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
  const project=await c.env.DB.prepare("SELECT p.id FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),user.id).first();
