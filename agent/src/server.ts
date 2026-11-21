@@ -1,12 +1,15 @@
 import http from "node:http";
 import { createHash, createHmac, timingSafeEqual, randomUUID, generateKeyPairSync } from "node:crypto";
-import { mkdir, realpath, statfs, readFile, writeFile, rm, readdir, lstat, open, rename } from "node:fs/promises";
+import { mkdir, realpath, statfs, readFile, writeFile, rm, readdir, lstat, open, rename, cp } from "node:fs/promises";
 import { inflateRawSync } from "node:zlib";
 import { resolve, sep, dirname } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import os from "node:os";
 import Docker from "dockerode";
 import { Server as SSHServer } from "ssh2";
 
+const execFileAsync=promisify(execFile);
 const PORT=Number(process.env.PORT||8788);
 const SECRET=process.env.HOSTPILOT_AGENT_SECRET||"";
 const PROJECT_ROOT=resolve(process.env.PROJECT_ROOT||"/srv/hostpilot/projects");
@@ -39,10 +42,40 @@ const server=http.createServer(async(req,res)=>{
   const raw=await readBody(req);
   if(req.method==="GET"&&req.url==="/health"){reply(res,200,{ok:true,agent:"hostpilot-node-agent"});return;}
   if(!verify(req,raw)){reply(res,401,{error:"INVALID_AGENT_SIGNATURE"});return;}
-  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir)$/i);
+  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir|backup|restore)$/i);
   if(req.method!=="POST"||!match){reply(res,404,{error:"NOT_FOUND"});return;}
   const id=safeId(match[1]);const action=match[2];const name="hp-"+id;
 
+  if(action==="backup"||action==="restore"){
+   const input=raw?JSON.parse(raw):{};const backupId=String(input.backup_id||"");
+   if(!/^[a-f0-9-]{36}$/i.test(backupId))throw new Error("INVALID_BACKUP_ID");
+   const root=await projectDirectory(id),backupRoot=resolve(PROJECT_ROOT,"..","backups",id);
+   await mkdir(backupRoot,{recursive:true,mode:0o700});
+   const archive=resolve(backupRoot,backupId+".tar.gz");
+   if(!archive.startsWith(backupRoot+sep))throw new Error("INVALID_BACKUP_PATH");
+   if(action==="backup"){
+    await execFileAsync("tar",["--exclude=./.git","--exclude=./node_modules","--exclude=./.venv","--exclude=./__pycache__","-czf",archive,"-C",root,"."],{timeout:600000,maxBuffer:1024*1024});
+    const st=await lstat(archive);if(!st.isFile()||st.isSymbolicLink())throw new Error("BACKUP_ARCHIVE_INVALID");
+    reply(res,200,{backup_id:backupId,size_bytes:st.size,created:true});return;
+   }
+   const archiveStat=await lstat(archive);if(!archiveStat.isFile()||archiveStat.isSymbolicLink()||archiveStat.size>1024*1024*1024)throw new Error("BACKUP_NOT_FOUND_OR_TOO_LARGE");
+   const listing=await execFileAsync("tar",["-tzf",archive],{timeout:120000,maxBuffer:8*1024*1024});
+   const names=listing.stdout.split("\n").filter(Boolean);
+   if(!names.length||names.length>10000||names.some(name=>name.startsWith("/")||name.split("/").some(part=>part==="..")))throw new Error("BACKUP_ARCHIVE_PATH_INVALID");
+   const staging=resolve(backupRoot,backupId+"-restore");
+   await rm(staging,{recursive:true,force:true});await mkdir(staging,{recursive:true,mode:0o700});
+   try{
+    await execFileAsync("tar",["--no-same-owner","--no-same-permissions","-xzf",archive,"-C",staging],{timeout:600000,maxBuffer:1024*1024});
+    let files=0,totalBytes=0;
+    const inspect=async(dir:string):Promise<void>=>{for(const entry of await readdir(dir,{withFileTypes:true})){const full=resolve(dir,entry.name);if(entry.isSymbolicLink())throw new Error("BACKUP_SYMLINK_NOT_ALLOWED");if(entry.isDirectory())await inspect(full);else if(entry.isFile()){const st=await lstat(full);files++;totalBytes+=st.size;if(files>10000||totalBytes>1024*1024*1024)throw new Error("BACKUP_RESTORE_LIMIT");}else throw new Error("BACKUP_SPECIAL_FILE_NOT_ALLOWED");}};
+    await inspect(staging);
+    let container:any=null,wasRunning=false;try{container=await getContainer(id);const info=await container.inspect();wasRunning=!!info.State.Running;if(wasRunning)await container.stop({t:15});}catch{}
+    for(const entry of await readdir(root))await rm(resolve(root,entry),{recursive:true,force:true});
+    await cp(staging,root,{recursive:true,force:true});
+    if(wasRunning&&container)await container.start().catch(()=>undefined);
+    reply(res,200,{backup_id:backupId,restored:true,files,size_bytes:totalBytes});return;
+   }finally{await rm(staging,{recursive:true,force:true}).catch(()=>undefined);}
+  }
   if(["logs","file_list","file_read","file_write","file_delete","file_mkdir"].includes(action)){
    const input=raw?JSON.parse(raw):{};const root=await projectDirectory(id);const relative=String(input.path||"");
    if(relative.length>512||relative.startsWith("/")||relative.split("/").some((part:string)=>part===".."||part==="."))throw new Error("INVALID_FILE_PATH");
@@ -306,6 +339,8 @@ async function pollAgentTasks(){
    const controlAction=String(payload.control_action||"");
    if(["logs","file_list","file_read","file_write","file_delete","file_mkdir"].includes(controlAction)){
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
+   }else if(controlAction==="backup"&&["create","restore"].includes(payload.backup_action)){
+    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+(payload.backup_action==="create"?"backup":"restore"),payload);
    }else if(!payload.upload_id&&["start","stop","restart"].includes(controlAction)){
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
    }
