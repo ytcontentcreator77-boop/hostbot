@@ -182,7 +182,7 @@ async function extractProjectZip(archive:Buffer,id:string,runtime:string){
   await writeFile(target,content,{flag:"wx",mode:0o660});extracted.push(relative);
  }
  const filesFound=extracted.sort();const manifests=filesFound.filter(x=>["requirements.txt","pyproject.toml","Pipfile","package.json","package-lock.json","pnpm-lock.yaml","yarn.lock"].includes(x.split("/").pop()||""));
- let entry="",startup="",runtime="python";
+ let entry="",startup="";
  const packagePath=runtime==="nodejs"?(filesFound.includes("package.json")?"package.json":filesFound.find(x=>x.endsWith("/package.json"))):undefined;
  if(runtime==="nodejs"){
   const packageData=packagePath?JSON.parse(await readFile(resolve(root,packagePath),"utf8")):{};const base=packagePath&&packagePath.includes("/")?packagePath.slice(0,packagePath.lastIndexOf("/"))+"/":"";
