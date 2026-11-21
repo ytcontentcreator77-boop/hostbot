@@ -19,5 +19,5 @@
     }
   ],
   "triggers": { "crons": ["* * * * *"] },
-  "vars": { "OWNER_IDS": "" }
+  "vars": { "OWNER_IDS": "", "APP_URL": "https://REPLACE_WITH_HOSTPILOT_DOMAIN" }
 }
