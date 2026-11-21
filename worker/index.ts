@@ -78,6 +78,11 @@ app.get("/api/payment-methods",async c=>{
   const methods=await c.env.DB.prepare("SELECT id,name,kind,instructions,min_amount_minor,max_amount_minor,currency FROM payment_methods WHERE enabled=1 ORDER BY sort_order,id").all();
   return c.json({methods:methods.results||[]});
 });
+app.get("/api/payment-requests",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const rows=await c.env.DB.prepare("SELECT id,amount_minor,currency,status,reference,created_at,review_note FROM payment_requests WHERE user_id=(SELECT id FROM users WHERE telegram_id=?) ORDER BY created_at DESC LIMIT 30").bind(user.id).all();
+ return c.json({requests:rows.results||[]});
+});
 app.post("/api/payment-requests",async c=>{
   const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);
   if(!user)return c.json({error:"UNAUTHORIZED"},401);
