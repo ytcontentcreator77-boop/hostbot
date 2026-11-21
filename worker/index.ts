@@ -76,6 +76,46 @@ app.post("/api/payment-requests",async c=>{
     .bind(id,account.id,method.id,body.amount_minor,method.currency,String(body.reference||"").slice(0,160)||null,"deposit:"+id).run();
   return c.json({id,status:"pending"},201);
 });
+async function sha256Hex(value:string):Promise<string>{
+  const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+app.post("/api/agent/heartbeat",async c=>{
+  const authorization=c.req.header("Authorization")||"";
+  const token=authorization.startsWith("Bearer ")?authorization.slice(7):"";
+  if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);
+  const hash=await sha256Hex(token);
+  const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();
+  if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
+  const body=await c.req.json<{agent_version?:string;capacity?:Record<string,unknown>;status?:string}>().catch(()=>null);
+  if(!body)return c.json({error:"INVALID_HEARTBEAT"},400);
+  const capacity=JSON.stringify(body.capacity&&typeof body.capacity==="object"?body.capacity:{});
+  await c.env.DB.prepare("UPDATE vps_servers SET status=?,capacity_json=?,agent_version=?,last_heartbeat_at=CURRENT_TIMESTAMP,last_error=NULL WHERE id=?")
+    .bind(body.status==="unhealthy"?"unhealthy":"healthy",capacity,String(body.agent_version||"unknown").slice(0,40),node.id).run();
+  return c.json({ok:true,server_id:node.id,server_time:new Date().toISOString()});
+});
+app.get("/api/admin/servers",async c=>{
+  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+  const rows=await c.env.DB.prepare("SELECT id,name,provider,region,endpoint,status,capacity_json,agent_version,last_heartbeat_at,enabled,last_error,created_at FROM vps_servers ORDER BY id DESC").all();
+  return c.json({servers:rows.results||[]});
+});
+app.post("/api/admin/servers",async c=>{
+  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+  const body=await c.req.json<{name:string;provider?:string;region?:string;endpoint?:string}>().catch(()=>null);
+  if(!body||typeof body.name!=="string"||body.name.trim().length<2||body.name.length>80)return c.json({error:"INVALID_SERVER"},400);
+  const provider=String(body.provider||"custom").trim().slice(0,60);
+  const region=String(body.region||"").trim().slice(0,80)||null;
+  const endpoint=String(body.endpoint||"").trim();
+  if(endpoint&&!endpoint.startsWith("https://"))return c.json({error:"ENDPOINT_MUST_USE_HTTPS"},400);
+  const token=crypto.randomUUID().replace(/-/g,"")+crypto.randomUUID().replace(/-/g,"");
+  const hash=await sha256Hex(token);
+  const result=await c.env.DB.prepare("INSERT INTO vps_servers(name,provider,region,endpoint,status,capacity_json,agent_token_hash,enabled) VALUES(?,?,?,?,'pending','{}',?,1)")
+    .bind(body.name.trim(),provider,region,endpoint,hash).run();
+  const serverId=Number(result.meta.last_row_id);
+  await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)")
+    .bind(admin.id,"server.register","vps_server",String(serverId),JSON.stringify({name:body.name,provider,region}),"success").run();
+  return c.json({ok:true,server_id:serverId,agent_token:token,warning:"Copy this token now. It is shown only once."},201);
+});
 app.get("/api/admin/overview",async c=>{
   const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
   const [users,projects,payments,servers]=await Promise.all([
