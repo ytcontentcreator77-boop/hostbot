@@ -163,6 +163,61 @@ app.get("/api/projects/:id/tasks/:task_id",async c=>{
  let result=null;try{result=row.result_json?JSON.parse(row.result_json):null;}catch{}
  return c.json({task:{id:row.id,status:row.status,result,error:row.error,created_at:row.created_at}});
 });
+
+app.post("/api/projects/:id/files/upload/init",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const projectId=c.req.param("id");if(!/^[a-f0-9-]{36}$/i.test(projectId))return c.json({error:"INVALID_PROJECT_ID"},400);
+ const body=await c.req.json<{path:string;size_bytes:number}>().catch(()=>null);
+ if(!body||typeof body.path!=="string"||!body.path.trim()||body.path.length>512||body.path.startsWith("/")||body.path.split("/").some(part=>!part||part==="."||part==="..")||!Number.isSafeInteger(body.size_bytes)||body.size_bytes<1)return c.json({error:"INVALID_FILE_UPLOAD"},400);
+ const project=await c.env.DB.prepare("SELECT p.id,p.user_id,p.server_id,p.resource_limits_json FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(projectId,user.id).first<any>();
+ if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
+ const plan=await c.env.DB.prepare("SELECT p.max_file_bytes,p.max_files,p.storage_mb FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.id DESC LIMIT 1").bind(project.user_id).first<any>();
+ if(!plan)return c.json({error:"ACTIVE_PLAN_REQUIRED"},403);
+ const maxBytes=Math.max(1,Math.min(500*1024*1024,Number(plan.max_file_bytes||10*1024*1024)));
+ if(body.size_bytes>maxBytes)return c.json({error:"PLAN_FILE_SIZE_LIMIT",max_bytes:maxBytes},413);
+ const chunkSize=256*1024,chunkCount=Math.ceil(body.size_bytes/chunkSize);
+ if(chunkCount>2048)return c.json({error:"FILE_CHUNK_LIMIT"},413);
+ const uploadId=crypto.randomUUID();
+ const cleanPath=body.path.split("/").map(part=>part.replace(/[^A-Za-z0-9._ -]/g,"_").slice(0,120)).join("/");
+ await c.env.DB.prepare("INSERT INTO project_uploads(id,project_id,user_id,filename,size_bytes,chunk_count,status,detected_json) VALUES(?,?,?,?,?,?,'receiving',?)")
+  .bind(uploadId,projectId,project.user_id,cleanPath.split("/").pop()||"upload.bin",body.size_bytes,chunkCount,JSON.stringify({kind:"file",path:cleanPath})).run();
+ return c.json({ok:true,upload_id:uploadId,chunk_size:chunkSize,chunk_count:chunkCount,max_bytes:maxBytes},201);
+});
+app.put("/api/projects/:id/files/upload/:upload_id/chunks/:index",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const upload=await c.env.DB.prepare("SELECT u.id,u.size_bytes,u.chunk_count,u.status FROM project_uploads u JOIN projects p ON p.id=u.project_id JOIN users a ON a.id=p.user_id WHERE u.id=? AND p.id=? AND a.telegram_id=? AND p.deleted_at IS NULL").bind(c.req.param("upload_id"),c.req.param("id"),user.id).first<any>();
+ if(!upload||upload.status!=="receiving")return c.json({error:"UPLOAD_NOT_FOUND_OR_CLOSED"},404);
+ const index=Number(c.req.param("index"));if(!Number.isInteger(index)||index<0||index>=upload.chunk_count)return c.json({error:"INVALID_CHUNK_INDEX"},400);
+ const body=await c.req.json<{chunk_base64:string}>().catch(()=>null);
+ if(!body||typeof body.chunk_base64!=="string"||body.chunk_base64.length>350000)return c.json({error:"INVALID_UPLOAD_CHUNK"},413);
+ let binary:string;try{binary=atob(body.chunk_base64);}catch{return c.json({error:"INVALID_CHUNK_ENCODING"},400);}
+ const expected=Math.min(256*1024,upload.size_bytes-index*256*1024);
+ if(binary.length!==expected)return c.json({error:"INVALID_CHUNK_SIZE",expected_bytes:expected},400);
+ const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+ await c.env.DB.prepare("INSERT INTO project_upload_chunks(upload_id,chunk_index,chunk_data) VALUES(?,?,?) ON CONFLICT(upload_id,chunk_index) DO UPDATE SET chunk_data=excluded.chunk_data").bind(upload.id,index,bytes.buffer).run();
+ return c.json({ok:true,index,received_bytes:bytes.length});
+});
+app.post("/api/projects/:id/files/upload/:upload_id/complete",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const project=await c.env.DB.prepare("SELECT p.id,p.user_id,p.server_id,p.resource_limits_json FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),user.id).first<any>();
+ if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
+ const upload=await c.env.DB.prepare("SELECT id,size_bytes,chunk_count,status,detected_json FROM project_uploads WHERE id=? AND project_id=? AND user_id=?").bind(c.req.param("upload_id"),project.id,project.user_id).first<any>();
+ if(!upload||upload.status!=="receiving")return c.json({error:"UPLOAD_NOT_FOUND_OR_CLOSED"},404);
+ const count=await c.env.DB.prepare("SELECT COUNT(*) AS count FROM project_upload_chunks WHERE upload_id=?").bind(upload.id).first<{count:number}>();
+ if(Number(count?.count||0)!==Number(upload.chunk_count))return c.json({error:"UPLOAD_INCOMPLETE",received_chunks:Number(count?.count||0),expected_chunks:upload.chunk_count},409);
+ const plan=await c.env.DB.prepare("SELECT p.max_file_bytes,p.max_files,p.storage_mb FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.id DESC LIMIT 1").bind(project.user_id).first<any>();
+ if(!plan||upload.size_bytes>Number(plan.max_file_bytes||10*1024*1024))return c.json({error:"PLAN_FILE_SIZE_LIMIT"},403);
+ let metadata:any={};try{metadata=JSON.parse(upload.detected_json||"{}");}catch{}
+ if(metadata.kind!=="file"||typeof metadata.path!=="string")return c.json({error:"UPLOAD_METADATA_INVALID"},400);
+ let resources:any={};try{resources=JSON.parse(project.resource_limits_json||"{}");}catch{}
+ const taskId=crypto.randomUUID(),payload={upload_id:upload.id,file_upload:true,path:metadata.path,max_file_bytes:Number(plan.max_file_bytes),max_files:Number(plan.max_files||resources.max_files||100),storage_mb:Number(plan.storage_mb||resources.storage_mb||512)};
+ await c.env.DB.batch([
+  c.env.DB.prepare("UPDATE project_uploads SET status='queued' WHERE id=? AND status='receiving'").bind(upload.id),
+  c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'restart',?)").bind(taskId,project.server_id,project.id,JSON.stringify(payload))
+ ]);
+ return c.json({ok:true,upload_id:upload.id,task_id:taskId,status:"queued"},202);
+});
+
 app.post("/api/projects/:id/upload",async c=>{
  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
  const projectId=c.req.param("id");if(!/^[a-f0-9-]{36}$/i.test(projectId))return c.json({error:"INVALID_PROJECT_ID"},400);
@@ -184,7 +239,7 @@ app.post("/api/projects/:id/upload",async c=>{
 app.get("/api/agent/uploads/:id",async c=>{
  const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);const hash=await sha256Hex(token);
  const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
- const upload=await c.env.DB.prepare("SELECT u.id,u.filename,u.size_bytes,u.chunk_count,u.project_id,p.runtime,p.runtime_version FROM project_uploads u JOIN projects p ON p.id=u.project_id WHERE u.id=? AND p.server_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),node.id).first<any>();
+ const upload=await c.env.DB.prepare("SELECT u.id,u.filename,u.size_bytes,u.chunk_count,u.project_id,u.detected_json,u.status,p.runtime,p.runtime_version FROM project_uploads u JOIN projects p ON p.id=u.project_id WHERE u.id=? AND p.server_id=? AND p.deleted_at IS NULL").bind(c.req.param("id"),node.id).first<any>();
  if(!upload)return c.json({error:"UPLOAD_NOT_FOUND"},404);return c.json({upload});
 });
 app.get("/api/agent/uploads/:id/chunks/:index",async c=>{
@@ -217,10 +272,18 @@ app.post("/api/agent/tasks/:id/result",async c=>{
  const task=await c.env.DB.prepare("SELECT project_id,action,payload_json FROM agent_tasks WHERE id=? AND server_id=? AND status='leased' AND lease_token=?").bind(c.req.param("id"),node.id,body.lease_token).first<{project_id:string|null;action:string;payload_json:string}>();
  if(!task)return c.json({error:"TASK_LEASE_INVALID"},409);
  const status=body.ok?"succeeded":"failed";
- await c.env.DB.batch([
-  c.env.DB.prepare("UPDATE agent_tasks SET status=?,result_json=?,error=?,lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND lease_token=?").bind(status,JSON.stringify(body.result??null).slice(0,120000),String(body.error||"").slice(0,1000)||null,c.req.param("id"),body.lease_token),
-  ...(task.project_id&&(()=>{let p:any={};try{p=JSON.parse(task.payload_json||"{}");}catch{}return !p.control_action||["start","stop","restart"].includes(p.control_action);})()?[c.env.DB.prepare("UPDATE projects SET status=?,entry_file=COALESCE(?,entry_file),startup_command=COALESCE(?,startup_command),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",body.ok&&body.result&&typeof body.result==="object"?(body.result as any).entry_file||null:null,body.ok&&body.result&&typeof body.result==="object"?(body.result as any).startup_command||null:null,task.project_id)]:[]),...(task.action==="create"&&JSON.parse(task.payload_json||"{}").upload_id?[c.env.DB.prepare("UPDATE project_uploads SET status=?,detected_json=? WHERE id=?").bind(body.ok?"deployed":"failed",JSON.stringify(body.result||{error:body.error||"DEPLOYMENT_FAILED"}).slice(0,12000),(JSON.parse(task.payload_json||"{}") as any).upload_id),...(!body.ok?[c.env.DB.prepare("DELETE FROM project_upload_chunks WHERE upload_id=?").bind((JSON.parse(task.payload_json||"{}") as any).upload_id)]:[]),...(body.ok?[c.env.DB.prepare("DELETE FROM project_upload_chunks WHERE upload_id=?").bind((JSON.parse(task.payload_json||"{}") as any).upload_id)]:[])]:[])
- ]);
+ const taskPayload=JSON.parse(task.payload_json||"{}");
+ const statements:any[]=[
+  c.env.DB.prepare("UPDATE agent_tasks SET status=?,result_json=?,error=?,lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND lease_token=?").bind(status,JSON.stringify(body.result??null).slice(0,120000),String(body.error||"").slice(0,1000)||null,c.req.param("id"),body.lease_token)
+ ];
+ if(task.project_id&&(!taskPayload.control_action||["start","stop","restart"].includes(taskPayload.control_action))){
+  statements.push(c.env.DB.prepare("UPDATE projects SET status=?,entry_file=COALESCE(?,entry_file),startup_command=COALESCE(?,startup_command),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",body.ok&&body.result&&typeof body.result==="object"?(body.result as any).entry_file||null:null,body.ok&&body.result&&typeof body.result==="object"?(body.result as any).startup_command||null:null,task.project_id));
+ }
+ if(taskPayload.upload_id){
+  statements.push(c.env.DB.prepare("UPDATE project_uploads SET status=?,detected_json=? WHERE id=?").bind(body.ok?(taskPayload.file_upload?"uploaded":"deployed"):"failed",JSON.stringify(body.result||{error:body.error||"UPLOAD_FAILED"}).slice(0,12000),taskPayload.upload_id));
+  statements.push(c.env.DB.prepare("DELETE FROM project_upload_chunks WHERE upload_id=?").bind(taskPayload.upload_id));
+ }
+ await c.env.DB.batch(statements);
  return c.json({ok:true,status});
 });
 
