@@ -123,8 +123,8 @@ async function startTerminalGateway(){
        session.on("window-change",(size:any)=>{void exec.resize({h:size.rows,w:size.cols}).catch(()=>undefined);});
        let idle:any=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();
        const resetIdle=()=>{clearTimeout(idle);idle=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();};
-       channel.on("data",resetIdle);stream.on("data",resetIdle);
-       channel.on("close",()=>{clearTimeout(idle);stream.destroy();sessions.delete(channel);if(!sessions.size)activeSessions.delete(authenticatedUser);});
+       channel.on("data",resetIdle);terminalStream.on("data",resetIdle);
+       channel.on("close",()=>clearTimeout(idle));
       }catch{channel.stderr.write("HostPilot: unable to open this project container.\\r\\n");channel.end();sessions.delete(channel);if(!sessions.size)activeSessions.delete(authenticatedUser);}
      })();
     });
