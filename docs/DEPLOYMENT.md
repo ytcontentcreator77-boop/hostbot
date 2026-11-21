@@ -36,3 +36,11 @@ This is an experimental feature. It has not yet been certified on a real VPS or 
 3. Keep the VPS agent running with `CONTROL_PLANE_URL` and the one-time `NODE_TOKEN`; it polls the control plane for leased tasks.
 4. Customers can create a Python or Node.js project from the Mini App. The Worker checks the active plan's project limit/runtime allowance, assigns a healthy node and queues a create task.
 5. The current create task provisions a constrained placeholder container only. It does not yet upload application source, install dependencies or run a customer entry file. Do not describe this as a deployed app until the file/build pipeline is implemented.
+
+## ZIP project upload and automatic detection
+1. Create a project in the Mini App and wait for the initial project container task to finish.
+2. Open the project card, select a `.zip` archive, then choose **Upload & deploy ZIP**. The upload is checked against the active plan's `max_upload_bytes` (and a 20 MB platform ceiling).
+3. The Worker temporarily stages the archive as 256 KB D1 chunks. Only the VPS node assigned to that project can download those chunks using its agent token. After successful extraction/deployment, the temporary chunk rows are deleted; the extracted project files live on that VPS disk.
+4. ZIP extraction rejects path traversal, symlinks, encrypted/unsupported entries, files above 20 MB, archives with more than 500 entries, total expansion above 100 MB and compression ratios above 100:1. A common top-level folder is stripped when present.
+5. Python detection looks for `main.py`, `bot.py`, `app.py`, `run.py` or `index.py`. It installs `requirements.txt` or a `pyproject.toml` project when present. Node detection reads `package.json` `main` and `scripts.start`, or falls back to `index.js`, `main.js`, `app.js`, `server.js` or `src/index.js`; it runs npm install when a package manifest is present.
+6. The project card shows the detected entry point and dependency manifests. Projects without a recognized entry point fail deployment and need a supported entry file or package start script.
