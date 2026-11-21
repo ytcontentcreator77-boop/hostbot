@@ -1,21 +1,20 @@
-# HostPilot deployment (initial foundation)
+# HostPilot deployment (development foundation)
 
 ## Cloudflare control plane
-1. Create a Cloudflare account and install Node.js 24+ locally.
-2. Run `npm install`.
-3. Create a D1 database: `npx wrangler d1 create hostpilot`.
-4. Copy the returned database ID into `wrangler.jsonc` in place of `REPLACE_WITH_D1_DATABASE_ID`.
-5. Set the bot token: `npx wrangler secret put BOT_TOKEN`.
-6. Set `OWNER_IDS` in Worker variables to the owner's numeric Telegram ID.
-7. Apply the schema: `npm run db:migrate:remote`.
-8. Build and deploy: `npm run deploy`.
-9. Set the Telegram webhook to `https://YOUR-WORKER-DOMAIN/bot` using Telegram's setWebhook API.
+1. Install Node.js 24+ and run `npm install`.
+2. Create D1: `npx wrangler d1 create hostpilot`.
+3. Put the returned database ID in `wrangler.jsonc` instead of `REPLACE_WITH_D1_DATABASE_ID`.
+4. Set secrets: `npx wrangler secret put BOT_TOKEN` and `npx wrangler secret put BOT_WEBHOOK_SECRET`.
+5. Set `OWNER_IDS` to the owner's numeric Telegram ID and `APP_URL` to the final HTTPS Worker/custom-domain URL in `wrangler.jsonc`.
+6. Apply migrations: `npm run db:migrate:remote`.
+7. Build and deploy: `npm run deploy`.
+8. Register the webhook using Telegram `setWebhook`, URL `https://YOUR-DOMAIN/bot`, and the same secret as `BOT_WEBHOOK_SECRET` in the `secret_token` parameter. Telegram sends it in `X-Telegram-Bot-Api-Secret-Token`.
 
-## VPS workload/storage plane
-Provision Ubuntu VPS nodes separately. Customer workloads must run in isolated containers managed by a dedicated HostPilot agent. Store project files, uploads, media and backups on VPS disks with per-user quotas and off-node backups. Do not execute customer code in Cloudflare Workers.
+## VPS workload and file storage
+Provision Ubuntu VPS nodes separately. Customer Python and Node.js code must run in isolated containers managed by a dedicated HostPilot agent. Project uploads, source files, media, logs and backups are stored on VPS disks with per-user quotas and off-node backup policy. Never execute customer code inside Cloudflare Workers.
 
 ## No R2
-This project intentionally has no R2 binding, bucket, SDK or R2 deployment step. D1 stores metadata only; large files live on VPS storage.
+There is intentionally no R2 binding, bucket, SDK, upload path or deployment step. D1 stores metadata; project files and media are stored on VPS disks.
 
-## Important
-The current repository is an early scaffold. The webhook's Mini App URL is a placeholder, the setup wizard is not yet implemented, and the VPS agent, container sandbox, complete UI, payment integrations and full admin features are not production-ready. Do not expose it to paying users until these components and security tests are complete.
+## Current implementation boundary
+This repository is still an early development scaffold. Telegram initData validation, basic profile/plans/dashboard endpoints, owner/admin gating and webhook secret validation are present. The setup wizard, VPS agent, container sandbox, full project lifecycle, complete customer/admin UI, payment integrations and preserved announcement/campaign/bonus/coupon modules are not complete. Do not use it for paying customers until these are implemented and security-tested.
