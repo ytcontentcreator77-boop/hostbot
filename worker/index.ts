@@ -42,6 +42,20 @@ app.get("/api/dashboard",async c=>{
   ]);
   return c.json({projects:projects.results||[],subscription:sub||null,wallet:wallet||{balance_minor:0,currency:"USD"}});
 });
+app.get("/api/languages",async c=>{
+  const result=await c.env.DB.prepare("SELECT code,native_name FROM languages WHERE enabled=1 ORDER BY is_default DESC,native_name").all();
+  return c.json({languages:result.results||[]});
+});
+app.post("/api/language",async c=>{
+  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);
+  if(!user)return c.json({error:"UNAUTHORIZED"},401);
+  const body=await c.req.json<{language_code:string}>().catch(()=>null);
+  if(!body||typeof body.language_code!=="string"||body.language_code.length>8)return c.json({error:"INVALID_LANGUAGE"},400);
+  const language=await c.env.DB.prepare("SELECT code FROM languages WHERE code=? AND enabled=1").bind(body.language_code).first();
+  if(!language)return c.json({error:"LANGUAGE_NOT_AVAILABLE"},400);
+  await c.env.DB.prepare("UPDATE users SET language_code=?,updated_at=CURRENT_TIMESTAMP WHERE telegram_id=?").bind(body.language_code,user.id).run();
+  return c.json({ok:true,language_code:body.language_code});
+});
 app.get("/api/payment-methods",async c=>{
   const methods=await c.env.DB.prepare("SELECT id,name,kind,instructions,min_amount_minor,max_amount_minor FROM payment_methods WHERE enabled=1 ORDER BY sort_order,id").all();
   return c.json({methods:methods.results||[]});
