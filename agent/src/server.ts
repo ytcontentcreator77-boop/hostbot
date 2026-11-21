@@ -48,7 +48,7 @@ const server=http.createServer(async(req,res)=>{
   const id=safeId(match[1]);const action=match[2];const name="hp-"+id;
 
   if(action==="github_backup"||action==="github_restore"){
-   const input=raw?JSON.parse(raw):{};const repository=String(input.repository||"").trim();const branchName=String(input.branch||"hostpilot-backup").trim();
+   const input=raw?JSON.parse(raw):{};const root=await projectDirectory(id);const repository=String(input.repository||"").trim();const branchName=String(input.branch||"hostpilot-backup").trim();
    if(!GITHUB_TOKEN)throw new Error("GITHUB_BACKUP_TOKEN_NOT_CONFIGURED_ON_AGENT");
    if(!/^[A-Za-z0-9_.-]{1,39}\\/[A-Za-z0-9_.-]{1,100}$/.test(repository)||!/^[-A-Za-z0-9._/]{1,100}$/.test(branchName)||branchName.includes(".."))throw new Error("INVALID_GITHUB_REPOSITORY_OR_BRANCH");
    const backupRoot=resolve(PROJECT_ROOT,"..","backups",id);await mkdir(backupRoot,{recursive:true,mode:0o700});
@@ -57,7 +57,7 @@ const server=http.createServer(async(req,res)=>{
    const git=async(args:string[],cwd?:string)=>execFileAsync("git",["-c","http.extraheader="+auth,...args],{cwd,timeout:600000,maxBuffer:4*1024*1024});
    try{
     if(action==="github_backup"){
-     let cloned=false;try{await git(["clone","--depth","1","--branch",branchName,remote,staging]);cloned=true;}catch{await rm(staging,{recursive:true,force:true});await mkdir(staging,{recursive:true,mode:0o700});await git(["init",staging]);await git(["-C",staging,"remote","add","origin",remote]);}
+     try{await git(["clone","--depth","1","--branch",branchName,remote,staging]);}catch{await rm(staging,{recursive:true,force:true});await mkdir(staging,{recursive:true,mode:0o700});await git(["init",staging]);await git(["-C",staging,"remote","add","origin",remote]);}
      await cp(root,staging,{recursive:true,force:true,filter:(source)=>{const rel=source.slice(root.length).split(sep);return !rel.some(part=>[".git","node_modules",".venv","__pycache__",".hostpilot"].includes(part));}});
      await git(["-C",staging,"config","user.name","HostPilot Backup"]);await git(["-C",staging,"config","user.email","backup@hostpilot.invalid"]);
      await git(["-C",staging,"add","-A"]);
