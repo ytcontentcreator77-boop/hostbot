@@ -114,12 +114,12 @@ async function startTerminalGateway(){
     session.on("shell",(accept:any,reject:any)=>{
      if(!hasPty){reject();return;}
      const sessions=activeSessions.get(authenticatedUser)||new Set<any>();if(sessions.size>=3){reject();return;}
-     const channel=accept();sessions.add(channel);activeSessions.set(authenticatedUser,sessions);
+     const channel=accept();let terminalStream:any;channel.on("close",()=>{if(terminalStream)terminalStream.destroy();sessions.delete(channel);if(!sessions.size)activeSessions.delete(authenticatedUser);});sessions.add(channel);activeSessions.set(authenticatedUser,sessions);
      const projectId=terminalProjects.get(authenticatedUser)||"";
      void (async()=>{
       try{const container=await getContainer(projectId);const info=await container.inspect();if(!info.State.Running){channel.stderr.write("HostPilot: project is stopped. Start it from the Mini App first.\\r\\n");channel.end();return;}
        const exec=await container.exec({Cmd:["/bin/sh"],User:"0:0",WorkingDir:"/workspace",Env:["HOME=/workspace","TERM=xterm-256color"],AttachStdin:true,AttachStdout:true,AttachStderr:true,Tty:true});
-       const stream=await exec.start({hijack:true,stdin:true});channel.pipe(stream);stream.pipe(channel);
+       terminalStream=await exec.start({hijack:true,stdin:true});channel.pipe(terminalStream);terminalStream.pipe(channel);
        session.on("window-change",(size:any)=>{void exec.resize({h:size.rows,w:size.cols}).catch(()=>undefined);});
        let idle:any=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();
        const resetIdle=()=>{clearTimeout(idle);idle=setTimeout(()=>channel.end("HostPilot terminal idle timeout."),30*60*1000);idle.unref?.();};
