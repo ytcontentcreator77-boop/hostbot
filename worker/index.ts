@@ -143,7 +143,7 @@ app.post("/api/projects",async c=>{
 
 app.post("/api/projects/:id/control",async c=>{
  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
- const projectId=c.req.param("id");const body=await c.req.json<{action:string;path?:string;content_base64?:string}>().catch(()=>null);
+ const projectId=c.req.param("id");const body=await c.req.json<{action:string;path?:string;content_base64?:string;offset?:number;length?:number}>().catch(()=>null);
  const allowed=["start","stop","restart","logs","file_list","file_read","file_write","file_delete","file_mkdir"];
  if(!body||!allowed.includes(body.action))return c.json({error:"INVALID_PROJECT_ACTION"},400);
  const project=await c.env.DB.prepare("SELECT p.id,p.server_id,p.user_id,p.runtime,p.runtime_version,p.resource_limits_json,p.startup_command FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(projectId,user.id).first<any>();
@@ -152,7 +152,7 @@ app.post("/api/projects/:id/control",async c=>{
  if(body.action==="file_write"&&(typeof body.content_base64!=="string"||body.content_base64.length>90000))return c.json({error:"FILE_CONTENT_TOO_LARGE"},413);
  const queueAction=["start","stop","restart"].includes(body.action)?body.action:"restart";
  const taskId=crypto.randomUUID();let limits:any={};try{limits=JSON.parse(project.resource_limits_json||"{}");}catch{}
- const payload={control_action:body.action,path:body.path||"",content_base64:body.content_base64||"",runtime:project.runtime,version:project.runtime_version,startup_command:project.startup_command||"sleep infinity",cpu_millicores:limits.cpu_millicores||500,ram_mb:limits.ram_mb||512,max_files:limits.max_files||100,storage_mb:limits.storage_mb||512,pids_limit:128};
+ const payload={control_action:body.action,path:body.path||"",content_base64:body.content_base64||"",offset:Number.isSafeInteger(body.offset)?body.offset:undefined,length:Number.isSafeInteger(body.length)?body.length:undefined,runtime:project.runtime,version:project.runtime_version,startup_command:project.startup_command||"sleep infinity",cpu_millicores:limits.cpu_millicores||500,ram_mb:limits.ram_mb||512,max_files:limits.max_files||100,storage_mb:limits.storage_mb||512,pids_limit:128};
  await c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,?,?)").bind(taskId,project.server_id,projectId,queueAction,JSON.stringify(payload)).run();
  return c.json({ok:true,task_id:taskId,status:"queued"},202);
 });
