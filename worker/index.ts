@@ -16,7 +16,14 @@ app.get("/api/me", async c => {
     VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(telegram_id) DO UPDATE SET first_name=excluded.first_name,
     last_name=excluded.last_name,username=excluded.username,updated_at=CURRENT_TIMESTAMP,last_seen_at=CURRENT_TIMESTAMP`)
     .bind(user.id,user.first_name||"",user.last_name||null,user.username||null,user.language_code||"en").run();
-  const profile=await c.env.DB.prepare("SELECT id,telegram_id,first_name,last_name,username,language_code,status,created_at FROM users WHERE telegram_id=?").bind(user.id).first();
+  const profile=await c.env.DB.prepare("SELECT id,telegram_id,first_name,last_name,username,language_code,status,created_at FROM users WHERE telegram_id=?").bind(user.id).first<{id:number}>();
+  if(profile){
+    await c.env.DB.prepare("INSERT OR IGNORE INTO wallets(user_id,balance_minor,currency) VALUES(?,0,'USD')").bind(profile.id).run();
+    await c.env.DB.prepare("UPDATE subscriptions SET status='expired' WHERE user_id=? AND status='active' AND datetime(expires_at)<=CURRENT_TIMESTAMP").bind(profile.id).run();
+    await c.env.DB.prepare(`INSERT INTO subscriptions(user_id,plan_id,status,starts_at,expires_at)
+      SELECT ?,id,'active',CURRENT_TIMESTAMP,datetime('now','+30 days') FROM plans
+      WHERE slug='free' AND NOT EXISTS(SELECT 1 FROM subscriptions WHERE user_id=? AND status='active')`).bind(profile.id,profile.id).run();
+  }
   return c.json({user:profile});
 });
 app.get("/api/plans",async c=>{
@@ -127,7 +134,7 @@ app.post("/bot",async c=>{
   else if(["/admin","/stats","/broadcast","/users","/payments","/projects"].includes(command))response=isAdmin?"Open the HostPilot Admin Panel to continue.":"You are not authorized to use this command.";
   const appUrl=c.env.APP_URL||"";
   const reply:any={chat_id:message.chat.id,text:response};
-  if(appUrl.startsWith("https://"))reply.reply_markup={inline_keyboard:[[{text:"Open HostPilot",web_app:{url:appUrl}}]]};
+  if(appUrl.startsWith("https://")&&!appUrl.includes("REPLACE_WITH"))reply.reply_markup={inline_keyboard:[[{text:"Open HostPilot",web_app:{url:appUrl}}]]};
   await fetch(`https://api.telegram.org/bot${c.env.BOT_TOKEN}/sendMessage`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(reply)});
   return c.json({ok:true});
 });
