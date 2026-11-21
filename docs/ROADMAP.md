@@ -32,12 +32,19 @@
 - [ ] Complete project CRUD, ZIP/file uploads, path traversal and zip-bomb validation, encrypted .env management and dependency build pipeline
 - [ ] Harden task channel with idempotent execution, mTLS/WireGuard deployment, node key rotation and operational alerting
 - [ ] Harden container isolation: rootless Docker, AppArmor/seccomp profiles, egress filtering, disk quotas, image pinning/scanning and abuse detection
-- [x] Initial VPS-backed project file browser/editor, project start/stop/restart controls and bounded container log retrieval through leased agent tasks\n- [x] Plan-limited chunked individual-file upload from the Mini App through temporary D1 chunks to the assigned VPS agent; per-file limits are enforced from the active plan (Free default 10 MB, Gold default 500 MB).\n- [x] Bounded chunked large-file downloads; [ ] directory upload, resumable upload recovery/expiry cleanup, upload integrity hashes, pagination and full file-manager UX hardening\n- [x] Python/Node dependency installation is invoked by project startup/rebuild and visible in container logs; [ ] build caching, metrics, health checks, crash-loop controls and resource reporting
+- [x] Initial VPS-backed project file browser/editor, project start/stop/restart controls and bounded container log retrieval through leased agent tasks
+- [x] Plan-limited chunked individual-file upload from the Mini App through temporary D1 chunks to the assigned VPS agent; per-file limits are enforced from the active plan (Free default 10 MB, Gold default 500 MB).
+- [x] Bounded chunked large-file downloads; [ ] directory upload, resumable upload recovery/expiry cleanup, upload integrity hashes, pagination and full file-manager UX hardening
+- [x] Python/Node dependency installation is invoked by project startup/rebuild and visible in container logs; [ ] build caching, metrics, health checks, crash-loop controls and resource reporting
 - [ ] Advanced VPS scheduler with resource-aware placement, quotas, node health, live migration and failover
-- [x] Project backup create/list/restore task pipeline and audited admin backup inventory/restore controls (archives remain on VPS disks)\n- [x] Scheduled VPS-side backup retention cleanup: expired archives are queued to their owning agent, deleted from disk, and marked deleted/failed in D1
+- [x] Project backup create/list/restore task pipeline and audited admin backup inventory/restore controls (archives remain on VPS disks)
+- [x] Scheduled VPS-side backup retention cleanup: expired archives are queued to their owning agent, deleted from disk, and marked deleted/failed in D1
 - [x] Admin JSON export/import for supported administrative data; [x] optional VPS-side GitHub branch backup/restore; [ ] off-node replication of all VPS data
-- [x] Admin overview dashboard with live user/project/payment/VPS counts\n- [x] Admin customer search by Telegram ID, username or name, with audited suspend/reactivate controls\n- [ ] Full responsive Admin Panel with granular staff roles, permissions and complete audit logging
-- [x] Admin editor for per-plan project count, file count, upload size, CPU, RAM and VPS storage limits\n- [x] Admin plan editor for price, currency, duration and resource limits; [ ] dependency and runtime-version allowlist editor
+- [x] Admin overview dashboard with live user/project/payment/VPS counts
+- [x] Admin customer search by Telegram ID, username or name, with audited suspend/reactivate controls
+- [ ] Full responsive Admin Panel with granular staff roles, permissions and complete audit logging
+- [x] Admin editor for per-plan project count, file count, upload size, CPU, RAM and VPS storage limits
+- [x] Admin plan editor for price, currency, duration and resource limits; [ ] dependency and runtime-version allowlist editor
 - [x] Admin payment-method editor, customer top-up request flow and payment review; [ ] proof uploads, receipts, refunds and verified eSewa/Khalti/UPI/Stars/manual gateways
 - [ ] Subscription lifecycle, renewal, expiry notifications, grace periods, suspension and vouchers
 - [x] Announcement management, scheduled audience campaigns, coupon management and admin data backup interfaces; [ ] bonus and broadcast management
