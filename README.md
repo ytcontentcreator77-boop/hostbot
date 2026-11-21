@@ -16,12 +16,7 @@ Telegram-based Python and Node.js cloud hosting control plane.
 The development branch now includes chunked individual-file uploads and downloads, dependency-aware project rebuilds with container logs, VPS tar backup/restore and retention cleanup, optional GitHub branch backup/restore, admin JSON export/import, announcement and scheduled campaign management, coupon management, payment-method administration, customer top-up requests, payment review and plan resource/price editing. GitHub backups require a `GITHUB_TOKEN` configured only in the VPS agent environment. These workflows have not yet passed CI or real-VPS integration testing and are not production-certified. See [the roadmap](docs/ROADMAP.md) and [deployment guide](docs/DEPLOYMENT.md).
 
 ## Quick start
-1. Install Node.js 24+ and run `npm install`.
-2. Create a Cloudflare D1 database and set its ID in `wrangler.jsonc`.
-3. Configure `BOT_TOKEN` and `BOT_WEBHOOK_SECRET` as Worker secrets.
-4. Set `OWNER_IDS` and `APP_URL`.
-5. Apply migrations with `npm run db:migrate:remote`.
-6. Run `npm run deploy`.
+See [the first-time setup guide](docs/SETUP.md). The interactive setup command is `npm run setup`; it configures Cloudflare D1, protected Telegram bot secrets, migrations, deployment, webhook, Mini App menu button and bot commands. It asks for your real HTTPS app URL and owner Telegram ID; it never writes the bot token into the repository.
 
 The VPS agent is a separate Node.js service under `agent/`. It is designed for compatible Linux VPS machines from any provider, using Docker and outbound HTTPS heartbeats. Provider-specific cloud APIs are not required. The current enrollment/heartbeat is only an initial foundation; remote job dispatch and production hardening remain unfinished.
 
