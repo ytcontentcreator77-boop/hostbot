@@ -485,6 +485,32 @@ app.get("/api/admin/overview",async c=>{
   ]);
   return c.json({users,projects,payments,servers});
 });
+app.get("/api/admin/backups",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const rows=await c.env.DB.prepare(`SELECT b.id,b.project_id,b.server_id,b.size_bytes,b.status,b.created_at,b.expires_at,
+ p.name AS project_name,u.telegram_id,u.first_name AS owner_name,v.name AS server_name
+ FROM backups b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=p.user_id
+ LEFT JOIN vps_servers v ON v.id=b.server_id
+ ORDER BY b.created_at DESC LIMIT 100`).all();
+ return c.json({backups:rows.results||[]});
+});
+app.post("/api/admin/backups/:id/restore",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const backupId=c.req.param("id");
+ if(!/^[a-f0-9-]{36}$/i.test(backupId))return c.json({error:"INVALID_BACKUP_ID"},400);
+ const backup=await c.env.DB.prepare(`SELECT b.id,b.project_id,b.server_id,b.status,p.name
+ FROM backups b JOIN projects p ON p.id=b.project_id
+ WHERE b.id=? AND p.deleted_at IS NULL`).bind(backupId).first<any>();
+ if(!backup||backup.status!=="completed")return c.json({error:"BACKUP_NOT_RESTORABLE"},404);
+ const pending=await c.env.DB.prepare("SELECT id FROM agent_tasks WHERE project_id=? AND status IN ('queued','leased') LIMIT 1").bind(backup.project_id).first();
+ if(pending)return c.json({error:"PROJECT_TASK_IN_PROGRESS"},409);
+ const taskId=crypto.randomUUID();
+ await c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'restart',?)")
+  .bind(taskId,backup.server_id,backup.project_id,JSON.stringify({control_action:"backup",backup_action:"restore",backup_id:backup.id})).run();
+ await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)")
+  .bind(admin.id,"backup.restore","backup",backup.id,JSON.stringify({project_id:backup.project_id,project_name:backup.name,task_id:taskId}),"queued").run();
+ return c.json({ok:true,backup_id:backup.id,task_id:taskId,status:"queued"},202);
+});
 app.post("/api/admin/wallet/adjust",async c=>{
   const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
   const body=await c.req.json<{telegram_id:number;amount_minor:number;currency:string;direction:"credit"|"debit";reason:string;idempotency_key:string}>().catch(()=>null);
