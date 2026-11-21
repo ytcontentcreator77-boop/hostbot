@@ -67,7 +67,7 @@ const server=http.createServer(async(req,res)=>{
     }
     await git(["clone","--depth","1","--branch",branchName,remote,staging]);
     const entries=await readdir(staging,{withFileTypes:true});
-    for(const entry of await readdir(root)){if(entry===".git")continue;await rm(resolve(root,entry),{recursive:true,force:true});}
+    for(const entry of await readdir(root))await rm(resolve(root,entry),{recursive:true,force:true});
     for(const entry of entries){if(entry.name===".git")continue;await cp(resolve(staging,entry.name),resolve(root,entry.name),{recursive:true,force:true});}
     reply(res,200,{repository,branch:branchName,restored:true});return;
    }finally{await rm(staging,{recursive:true,force:true}).catch(()=>undefined);}
