@@ -335,6 +335,26 @@ app.put("/api/admin/terminal/users/:telegram_id",async c=>{
   return c.json({ok:true,telegram_id:telegramId,terminal_override:body.enabled});
 });
 
+app.get("/api/admin/users",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const query=(c.req.query("q")||"").trim().slice(0,80),limit=Math.min(50,Math.max(1,Number(c.req.query("limit")||20))),offset=Math.max(0,Number(c.req.query("offset")||0));
+ const pattern="%"+query+"%";
+ const rows=await c.env.DB.prepare(`SELECT u.telegram_id,u.first_name,u.last_name,u.username,u.status,u.language_code,u.created_at,
+ (SELECT COUNT(*) FROM projects p WHERE p.user_id=u.id AND p.deleted_at IS NULL) AS project_count,
+ (SELECT pl.name FROM subscriptions s JOIN plans pl ON pl.id=s.plan_id WHERE s.user_id=u.id ORDER BY s.created_at DESC LIMIT 1) AS plan_name
+ FROM users u WHERE (?='' OR CAST(u.telegram_id AS TEXT) LIKE ? OR u.username LIKE ? OR u.first_name LIKE ?) ORDER BY u.created_at DESC LIMIT ? OFFSET ?`).bind(query,pattern,pattern,pattern,limit,offset).all();
+ const count=await c.env.DB.prepare("SELECT COUNT(*) AS total FROM users WHERE (?='' OR CAST(telegram_id AS TEXT) LIKE ? OR username LIKE ? OR first_name LIKE ?)").bind(query,pattern,pattern,pattern).first<any>();
+ return c.json({users:rows.results||[],total:Number(count?.total||0),limit,offset});
+});
+app.put("/api/admin/users/:telegram_id/status",async c=>{
+ const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
+ const telegramId=Number(c.req.param("telegram_id"));const body=await c.req.json<{status:"active"|"suspended"}>().catch(()=>null);
+ if(!Number.isSafeInteger(telegramId)||telegramId<1||!body||!["active","suspended"].includes(body.status))return c.json({error:"INVALID_REQUEST"},400);
+ const result=await c.env.DB.prepare("UPDATE users SET status=?,updated_at=CURRENT_TIMESTAMP WHERE telegram_id=?").bind(body.status,telegramId).run();
+ if(!result.meta.changes)return c.json({error:"USER_NOT_FOUND"},404);
+ await c.env.DB.prepare("INSERT INTO audit_logs(staff_telegram_id,action,target_type,target_id,metadata_json,result) VALUES(?,?,?,?,?,?)").bind(admin.id,"user.status","user",String(telegramId),JSON.stringify({status:body.status}),"success").run();
+ return c.json({ok:true,telegram_id:telegramId,status:body.status});
+});
 app.get("/api/admin/overview",async c=>{
   const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
   const [users,projects,payments,servers]=await Promise.all([
