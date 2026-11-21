@@ -97,17 +97,19 @@ app.post("/api/agent/heartbeat",async c=>{
 });
 app.get("/api/admin/servers",async c=>{
   const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
-  const rows=await c.env.DB.prepare("SELECT id,name,provider,region,endpoint,status,capacity_json,agent_version,last_heartbeat_at,enabled,last_error,created_at FROM vps_servers ORDER BY id DESC").all();
+  const rows=await c.env.DB.prepare("SELECT id,name,provider,region,endpoint,ssh_host,ssh_port,status,capacity_json,agent_version,last_heartbeat_at,enabled,last_error,created_at FROM vps_servers ORDER BY id DESC").all();
   return c.json({servers:rows.results||[]});
 });
 app.post("/api/admin/servers",async c=>{
   const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
-  const body=await c.req.json<{name:string;provider?:string;region?:string;endpoint?:string}>().catch(()=>null);
+  const body=await c.req.json<{name:string;provider?:string;region?:string;endpoint?:string;ssh_host?:string;ssh_port?:number}>().catch(()=>null);
   if(!body||typeof body.name!=="string"||body.name.trim().length<2||body.name.length>80)return c.json({error:"INVALID_SERVER"},400);
   const provider=String(body.provider||"custom").trim().slice(0,60);
   const region=String(body.region||"").trim().slice(0,80)||null;
   const endpoint=String(body.endpoint||"").trim();
   if(endpoint&&!endpoint.startsWith("https://"))return c.json({error:"ENDPOINT_MUST_USE_HTTPS"},400);
+  const sshHost=String(body.ssh_host||"").trim().slice(0,253)||null;const sshPort=body.ssh_port===undefined?2222:Number(body.ssh_port);
+  if(!Number.isInteger(sshPort)||sshPort<1||sshPort>65535)return c.json({error:"INVALID_SSH_PORT"},400);
   const token=crypto.randomUUID().replace(/-/g,"")+crypto.randomUUID().replace(/-/g,"");
   const hash=await sha256Hex(token);
   const result=await c.env.DB.prepare("INSERT INTO vps_servers(name,provider,region,endpoint,status,capacity_json,agent_token_hash,enabled) VALUES(?,?,?,?,'pending','{}',?,1)")
@@ -130,6 +132,40 @@ async function terminalEntitlement(db:D1Database,telegramId:number){
   return {allowed,source:row.terminal_override===null?"plan":"admin_override",
     plan:row.plan_slug||"free",reason:allowed?"ENABLED":"TERMINAL_NOT_INCLUDED"};
 }
+app.get("/api/terminal/projects",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const access=await terminalEntitlement(c.env.DB,user.id);if(!access.allowed)return c.json({error:"TERMINAL_NOT_INCLUDED"},403);
+ const rows=await c.env.DB.prepare("SELECT p.id,p.name,p.status,v.name AS server_name,v.ssh_host,v.ssh_port,(SELECT fingerprint FROM terminal_ssh_keys k WHERE k.project_id=p.id AND k.user_id=p.user_id AND k.revoked_at IS NULL) AS fingerprint FROM projects p JOIN users u ON u.id=p.user_id LEFT JOIN vps_servers v ON v.id=p.server_id WHERE u.telegram_id=? AND p.deleted_at IS NULL ORDER BY p.created_at DESC").bind(user.id).all();
+ return c.json({projects:(rows.results||[]).map((p:any)=>({...p,ssh_username:"hp_"+String(p.id).replace(/-/g,"")}))});
+});
+app.post("/api/terminal/projects/:id/key",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const access=await terminalEntitlement(c.env.DB,user.id);if(!access.allowed)return c.json({error:"TERMINAL_NOT_INCLUDED"},403);
+ const projectId=c.req.param("id");if(!/^[a-f0-9-]{36}$/i.test(projectId))return c.json({error:"INVALID_PROJECT_ID"},400);
+ const body=await c.req.json<{public_key:string}>().catch(()=>null);if(!body||typeof body.public_key!=="string"||body.public_key.length>16384)return c.json({error:"INVALID_PUBLIC_KEY"},400);
+ const parts=body.public_key.trim().split(/\s+/);const keyType=parts[0],blob=parts[1];
+ if(!["ssh-ed25519","ecdsa-sha2-nistp256"].includes(keyType)||!blob||!/^[A-Za-z0-9+/]+={0,2}$/.test(blob))return c.json({error:"USE_ED25519_OR_ECDSA_PUBLIC_KEY"},400);
+ let decoded:Uint8Array;try{decoded=Uint8Array.from(atob(blob),ch=>ch.charCodeAt(0));}catch{return c.json({error:"INVALID_PUBLIC_KEY"},400);}
+ if(decoded.length<32||decoded.length>8192||btoa(String.fromCharCode(...decoded))!==blob)return c.json({error:"INVALID_PUBLIC_KEY"},400);
+ const project=await c.env.DB.prepare("SELECT p.id,p.user_id,p.server_id FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(projectId,user.id).first<{id:string;user_id:number;server_id:number|null}>();
+ if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);if(!project.server_id)return c.json({error:"PROJECT_NOT_ASSIGNED_TO_VPS"},409);
+ const server=await c.env.DB.prepare("SELECT ssh_host,ssh_port,enabled FROM vps_servers WHERE id=?").bind(project.server_id).first<{ssh_host:string|null;ssh_port:number;enabled:number}>();
+ if(!server||!server.enabled||!server.ssh_host)return c.json({error:"SSH_ENDPOINT_NOT_CONFIGURED"},409);
+ const digest=await crypto.subtle.digest("SHA-256",decoded);const fingerprint="SHA256:"+btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/=+$/,"");
+ await c.env.DB.prepare("INSERT INTO terminal_ssh_keys(project_id,user_id,key_type,key_blob,fingerprint,revoked_at) VALUES(?,?,?,?,?,NULL) ON CONFLICT(project_id,user_id) DO UPDATE SET key_type=excluded.key_type,key_blob=excluded.key_blob,fingerprint=excluded.fingerprint,created_at=CURRENT_TIMESTAMP,revoked_at=NULL").bind(projectId,project.user_id,keyType,blob,fingerprint).run();
+ return c.json({ok:true,fingerprint,ssh_host:server.ssh_host,ssh_port:server.ssh_port,ssh_username:"hp_"+projectId.replace(/-/g,"")});
+});
+app.delete("/api/terminal/projects/:id/key",async c=>{
+ const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
+ const access=await terminalEntitlement(c.env.DB,user.id);if(!access.allowed)return c.json({error:"TERMINAL_NOT_INCLUDED"},403);
+ const result=await c.env.DB.prepare("UPDATE terminal_ssh_keys SET revoked_at=CURRENT_TIMESTAMP WHERE project_id=? AND user_id=(SELECT id FROM users WHERE telegram_id=?) AND revoked_at IS NULL").bind(c.req.param("id"),user.id).run();return c.json({ok:true,revoked:result.meta.changes||0});
+});
+app.get("/api/agent/terminal/keys",async c=>{
+ const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);
+ const hash=await sha256Hex(token);const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
+ const rows=await c.env.DB.prepare("SELECT k.project_id,k.key_blob FROM terminal_ssh_keys k JOIN projects p ON p.id=k.project_id WHERE p.server_id=? AND p.deleted_at IS NULL AND k.revoked_at IS NULL").bind(node.id).all();
+ return c.json({keys:(rows.results||[]).map((r:any)=>({username:"hp_"+String(r.project_id).replace(/-/g,""),project_id:r.project_id,key_blob:r.key_blob}))});
+});
 app.get("/api/terminal/access",async c=>{
   const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);
   if(!user)return c.json({error:"UNAUTHORIZED"},401);
