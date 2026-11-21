@@ -1,6 +1,7 @@
 import http from "node:http";
 import { createHash, createHmac, timingSafeEqual, randomUUID, generateKeyPairSync } from "node:crypto";
-import { mkdir, realpath, statfs, readFile, writeFile } from "node:fs/promises";
+import { mkdir, realpath, statfs, readFile, writeFile, rm } from "node:fs/promises";
+import { inflateRawSync } from "node:zlib";
 import { resolve, sep } from "node:path";
 import os from "node:os";
 import Docker from "dockerode";
@@ -141,6 +142,61 @@ async function startTerminalGateway(){
 const CONTROL_PLANE_URL=(process.env.CONTROL_PLANE_URL||"").replace(/\/$/,"");
 const NODE_TOKEN=process.env.NODE_TOKEN||"";
 
+
+function zipCrc32(data:Buffer){let crc=0xffffffff;for(const byte of data){crc^=byte;for(let i=0;i<8;i++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return (crc^0xffffffff)>>>0;}
+async function extractProjectZip(archive:Buffer,id:string){
+ if(archive.length<22||archive.length>20*1024*1024)throw new Error("ZIP_SIZE_INVALID");
+ let eocd=-1;for(let i=archive.length-22;i>=Math.max(0,archive.length-65557);i--){if(archive.readUInt32LE(i)===0x06054b50){eocd=i;break;}}
+ if(eocd<0)throw new Error("ZIP_DIRECTORY_MISSING");
+ const entries=archive.readUInt16LE(eocd+10),centralSize=archive.readUInt32LE(eocd+12),centralOffset=archive.readUInt32LE(eocd+16);
+ if(entries<1||entries>500||centralOffset+centralSize>eocd)throw new Error("ZIP_ENTRY_LIMIT_OR_DIRECTORY_INVALID");
+ const rawEntries:Array<{name:string;method:number;compressed:number;size:number;crc:number;offset:number;mode:number}>=[];
+ let pos=centralOffset,total=0;
+ for(let i=0;i<entries;i++){
+  if(pos+46>archive.length||archive.readUInt32LE(pos)!==0x02014b50)throw new Error("ZIP_DIRECTORY_CORRUPT");
+  const flags=archive.readUInt16LE(pos+8),method=archive.readUInt16LE(pos+10),crc=archive.readUInt32LE(pos+16),compressed=archive.readUInt32LE(pos+20),size=archive.readUInt32LE(pos+24);
+  const nameLen=archive.readUInt16LE(pos+28),extraLen=archive.readUInt16LE(pos+30),commentLen=archive.readUInt16LE(pos+32),mode=archive.readUInt32LE(pos+38)>>>16,offset=archive.readUInt32LE(pos+42);
+  if(flags&1||![0,8].includes(method))throw new Error("ZIP_ENCRYPTION_OR_COMPRESSION_UNSUPPORTED");
+  const name=archive.subarray(pos+46,pos+46+nameLen).toString("utf8");
+  if(!name||name.includes("\\")||name.startsWith("/")||/^[A-Za-z]:/.test(name)||name.split("/").some(part=>part===".."||part==="."))throw new Error("ZIP_UNSAFE_PATH");
+  if((mode&0xf000)===0xa000)throw new Error("ZIP_SYMLINK_NOT_ALLOWED");
+  if(size>20*1024*1024)throw new Error("ZIP_FILE_TOO_LARGE");
+  total+=size;if(total>100*1024*1024)throw new Error("ZIP_EXPANDED_SIZE_LIMIT");
+  if(compressed===0?size>0:size/compressed>100)throw new Error("ZIP_COMPRESSION_RATIO_LIMIT");
+  rawEntries.push({name,method,compressed,size,crc,offset,mode});pos+=46+nameLen+extraLen+commentLen;
+ }
+ const files=rawEntries.filter(x=>!x.name.endsWith("/"));const first=files.map(x=>x.name.split("/")[0]);
+ const stripRoot=files.length>0&&first.every(x=>x===first[0])&&rawEntries.some(x=>x.name===first[0]+"/");
+ const root=await projectDirectory(id);await rm(root,{recursive:true,force:true});await mkdir(root,{recursive:true,mode:0o770});
+ const extracted:string[]=[];
+ for(const item of files){
+  const relative=stripRoot?item.name.slice(first[0].length+1):item.name;if(!relative)continue;
+  const parts=relative.split("/");if(parts.some(p=>!p||p==="."||p===".."))throw new Error("ZIP_UNSAFE_PATH");
+  const target=resolve(root,relative);if(!target.startsWith(root+sep))throw new Error("ZIP_PATH_TRAVERSAL");
+  const local=item.offset;if(local+30>archive.length||archive.readUInt32LE(local)!==0x04034b50)throw new Error("ZIP_LOCAL_HEADER_INVALID");
+  const start=local+30+archive.readUInt16LE(local+26)+archive.readUInt16LE(local+28),end=start+item.compressed;if(end>archive.length)throw new Error("ZIP_DATA_TRUNCATED");
+  const packed=archive.subarray(start,end);const content=item.method===0?Buffer.from(packed):inflateRawSync(packed,{maxOutputLength:20*1024*1024});
+  if(content.length!==item.size||zipCrc32(content)!==item.crc)throw new Error("ZIP_INTEGRITY_CHECK_FAILED");
+  await mkdir(resolve(target,".."),{recursive:true,mode:0o770});const parent=await realpath(resolve(target,".."));if(!parent.startsWith(root+sep))throw new Error("ZIP_PATH_ESCAPE");
+  await writeFile(target,content,{flag:"wx",mode:0o660});extracted.push(relative);
+ }
+ const filesFound=extracted.sort();const manifests=filesFound.filter(x=>["requirements.txt","pyproject.toml","Pipfile","package.json","package-lock.json","pnpm-lock.yaml","yarn.lock"].includes(x.split("/").pop()||""));
+ let entry="",startup="",runtime="python";
+ const packagePath=filesFound.includes("package.json")?"package.json":filesFound.find(x=>x.endsWith("/package.json"));
+ if(packagePath){
+  runtime="nodejs";const packageData=JSON.parse(await readFile(resolve(root,packagePath),"utf8"));const base=packagePath.includes("/")?packagePath.slice(0,packagePath.lastIndexOf("/"))+"/":"";
+  const hasStart=typeof packageData.scripts?.start==="string";entry=base+(typeof packageData.main==="string"?packageData.main:["index.js","main.js","app.js","server.js","src/index.js"].find(x=>filesFound.includes(base+x))||"");
+  if(!entry||!filesFound.includes(entry))throw new Error("NODE_ENTRY_FILE_NOT_FOUND");
+  startup="cd /workspace && npm install --omit=dev --no-audit --no-fund && "+(hasStart?"npm start":"node "+JSON.stringify("/workspace/"+entry));
+ }else{
+  entry=filesFound.find(x=>["main.py","bot.py","app.py","run.py","index.py"].includes(x.split("/").pop()||""))||"";
+  if(!entry)throw new Error("PYTHON_ENTRY_FILE_NOT_FOUND");
+  const req=filesFound.includes("requirements.txt")?"python -m pip install --disable-pip-version-check --target=/workspace/.hostpilot/python-deps -r /workspace/requirements.txt && PYTHONPATH=/workspace/.hostpilot/python-deps ":"";
+  startup=req+"python /workspace/"+entry;
+ }
+ return {entry_file:entry,startup_command:startup,files:filesFound.slice(0,200),manifests,runtime};
+}
+
 let taskPollBusy=false;
 async function signedLocalAgentAction(path:string,body:unknown){
  const raw=JSON.stringify(body||{});const ts=String(Math.floor(Date.now()/1000));const nonce=randomUUID();
@@ -163,9 +219,20 @@ async function pollAgentTasks(){
   try{
    if(!/^[a-f0-9-]{36}$/i.test(task.project_id))throw new Error("INVALID_TASK_PROJECT");
    const payload=JSON.parse(task.payload_json||"{}");
-   const action=task.action==="create"?"start":task.action;
-   if(!["start","stop","restart","delete"].includes(action))throw new Error("UNSUPPORTED_TASK_ACTION");
-   result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+action,payload);
+   let uploadResult:any=null;
+   if(payload.upload_id){
+    const metaResponse=await fetch(CONTROL_PLANE_URL+"/api/agent/uploads/"+encodeURIComponent(String(payload.upload_id)),{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(15000)});
+    if(!metaResponse.ok)throw new Error("UPLOAD_METADATA_UNAVAILABLE");
+    const meta=(await metaResponse.json() as any).upload;if(!meta||meta.chunk_count<1||meta.chunk_count>80)throw new Error("UPLOAD_METADATA_INVALID");
+    const chunks:Buffer[]=[];
+    for(let i=0;i<meta.chunk_count;i++){const response=await fetch(CONTROL_PLANE_URL+"/api/agent/uploads/"+encodeURIComponent(String(payload.upload_id))+"/chunks/"+i,{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error("UPLOAD_CHUNK_DOWNLOAD_FAILED");chunks.push(Buffer.from(await response.arrayBuffer()));}
+    uploadResult=await extractProjectZip(Buffer.concat(chunks),task.project_id);payload.startup_command=uploadResult.startup_command;
+    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/start",payload);
+    result={...(result as any),...uploadResult};
+   }
+   const action=payload.upload_id?"upload_done":(task.action==="create"?"start":task.action);
+   if(action!=="upload_done"&&!["start","stop","restart","delete"].includes(action))throw new Error("UNSUPPORTED_TASK_ACTION");
+   if(action!=="upload_done")result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+action,payload);
   }catch(e){error=e instanceof Error?e.message:"AGENT_TASK_FAILED";}
   const ack=await fetch(CONTROL_PLANE_URL+"/api/agent/tasks/"+task.id+"/result",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+NODE_TOKEN},body:JSON.stringify({lease_token:task.lease_token,ok:!error,result,error}),signal:AbortSignal.timeout(10000)});
   if(!ack.ok)process.stderr.write("HostPilot task acknowledgement failed: "+ack.status+"\n");
