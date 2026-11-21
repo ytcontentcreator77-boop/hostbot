@@ -1,6 +1,6 @@
 import http from "node:http";
 import { createHash, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
-import { mkdir, realpath } from "node:fs/promises";
+import { mkdir, realpath, statfs } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import os from "node:os";
 import Docker from "dockerode";
@@ -77,12 +77,22 @@ const NODE_TOKEN=process.env.NODE_TOKEN||"";
 async function sendHeartbeat(){
  if(!CONTROL_PLANE_URL||!NODE_TOKEN)return;
  try{
+  await mkdir(PROJECT_ROOT,{recursive:true,mode:0o770});
+  let dockerReady=false;
+  let dockerVersion="unavailable";
+  try{await docker.ping();dockerReady=true;const info=await docker.version();dockerVersion=String(info.Version||"unknown");}catch{}
+  let diskTotalMb=0,diskFreeMb=0;
+  try{const disk=await statfs(PROJECT_ROOT);diskTotalMb=Math.floor(disk.blocks*disk.bsize/1048576);diskFreeMb=Math.floor(disk.bavail*disk.bsize/1048576);}catch{}
+  const linux=os.platform()==="linux";
   const response=await fetch(CONTROL_PLANE_URL+"/api/agent/heartbeat",{
    method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+NODE_TOKEN},
-   body:JSON.stringify({agent_version:"0.2.0",status:"healthy",capacity:{
-    platform:os.platform(),architecture:os.arch(),cpu_cores:os.cpus().length,
-    memory_total_mb:Math.floor(os.totalmem()/1048576),memory_free_mb:Math.floor(os.freemem()/1048576),
-    node_version:process.version
+   signal:AbortSignal.timeout(8000),
+   body:JSON.stringify({agent_version:"0.3.0",status:linux&&dockerReady?"healthy":"unhealthy",capacity:{
+    platform:os.platform(),os_release:os.release(),architecture:os.arch(),
+    cpu_cores:os.cpus().length,memory_total_mb:Math.floor(os.totalmem()/1048576),
+    memory_free_mb:Math.floor(os.freemem()/1048576),disk_total_mb:diskTotalMb,disk_free_mb:diskFreeMb,
+    node_version:process.version,docker_available:dockerReady,docker_version:dockerVersion,
+    supported_runtimes:Object.keys(versions)
    }})
   });
   if(!response.ok)process.stderr.write("HostPilot heartbeat rejected: "+response.status+"\\n");
