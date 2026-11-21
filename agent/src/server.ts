@@ -11,7 +11,7 @@ import { Server as SSHServer } from "ssh2";
 
 const execFileAsync=promisify(execFile);
 const PORT=Number(process.env.PORT||8788);
-const SECRET=process.env.HOSTPILOT_AGENT_SECRET||"";
+const SECRET=process.env.HOSTPILOT_AGENT_SECRET||"";\nconst GITHUB_TOKEN=process.env.GITHUB_TOKEN||"";
 const PROJECT_ROOT=resolve(process.env.PROJECT_ROOT||"/srv/hostpilot/projects");
 const DOCKER_SOCKET=process.env.DOCKER_SOCKET||process.env.DOCKER_HOST||"/run/user/1000/docker.sock";
 const docker=new Docker(DOCKER_SOCKET.startsWith("unix://")?{socketPath:DOCKER_SOCKET.slice(7)}:{socketPath:DOCKER_SOCKET});
@@ -42,10 +42,35 @@ const server=http.createServer(async(req,res)=>{
   const raw=await readBody(req);
   if(req.method==="GET"&&req.url==="/health"){reply(res,200,{ok:true,agent:"hostpilot-node-agent"});return;}
   if(!verify(req,raw)){reply(res,401,{error:"INVALID_AGENT_SIGNATURE"});return;}
-  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir|backup|restore|backup_delete)$/i);
+  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir|backup|restore|backup_delete|github_backup|github_restore)$/i);
   if(req.method!=="POST"||!match){reply(res,404,{error:"NOT_FOUND"});return;}
   const id=safeId(match[1]);const action=match[2];const name="hp-"+id;
 
+  if(action==="github_backup"||action==="github_restore"){
+   const input=raw?JSON.parse(raw):{};const repository=String(input.repository||"").trim();const branchName=String(input.branch||"hostpilot-backup").trim();
+   if(!GITHUB_TOKEN)throw new Error("GITHUB_BACKUP_TOKEN_NOT_CONFIGURED_ON_AGENT");
+   if(!/^[A-Za-z0-9_.-]{1,39}\\/[A-Za-z0-9_.-]{1,100}$/.test(repository)||!/^[-A-Za-z0-9._/]{1,100}$/.test(branchName)||branchName.includes(".."))throw new Error("INVALID_GITHUB_REPOSITORY_OR_BRANCH");
+   const backupRoot=resolve(PROJECT_ROOT,"..","backups",id);await mkdir(backupRoot,{recursive:true,mode:0o700});
+   const staging=resolve(backupRoot,"github-"+randomUUID());const remote="https://github.com/"+repository+".git";
+   const auth="AUTHORIZATION: basic "+Buffer.from("x-access-token:"+GITHUB_TOKEN).toString("base64");
+   const git=async(args:string[],cwd?:string)=>execFileAsync("git",["-c","http.extraheader="+auth,...args],{cwd,timeout:600000,maxBuffer:4*1024*1024});
+   try{
+    if(action==="github_backup"){
+     let cloned=false;try{await git(["clone","--depth","1","--branch",branchName,remote,staging]);cloned=true;}catch{await rm(staging,{recursive:true,force:true});await mkdir(staging,{recursive:true,mode:0o700});await git(["init",staging]);await git(["-C",staging,"remote","add","origin",remote]);}
+     await cp(root,staging,{recursive:true,force:true,filter:(source)=>{const rel=source.slice(root.length).split(sep);return !rel.some(part=>[".git","node_modules",".venv","__pycache__",".hostpilot"].includes(part));}});
+     await git(["-C",staging,"config","user.name","HostPilot Backup"]);await git(["-C",staging,"config","user.email","backup@hostpilot.invalid"]);
+     await git(["-C",staging,"add","-A"]);
+     try{await git(["-C",staging,"commit","-m","HostPilot project backup "+new Date().toISOString()]);}catch(error){if(!String(error).includes("nothing to commit"))throw error;}
+     await git(["-C",staging,"push","-u","origin","HEAD:refs/heads/"+branchName]);
+     reply(res,200,{repository,branch:branchName,backed_up:true});return;
+    }
+    await git(["clone","--depth","1","--branch",branchName,remote,staging]);
+    const entries=await readdir(staging,{withFileTypes:true});
+    for(const entry of await readdir(root)){if(entry===".git")continue;await rm(resolve(root,entry),{recursive:true,force:true});}
+    for(const entry of entries){if(entry.name===".git")continue;await cp(resolve(staging,entry.name),resolve(root,entry.name),{recursive:true,force:true});}
+    reply(res,200,{repository,branch:branchName,restored:true});return;
+   }finally{await rm(staging,{recursive:true,force:true}).catch(()=>undefined);}
+  }
   if(action==="backup_delete"){
    const input=raw?JSON.parse(raw):{};const backupId=String(input.backup_id||"");
    if(!/^[a-f0-9-]{36}$/i.test(backupId))throw new Error("INVALID_BACKUP_ID");
