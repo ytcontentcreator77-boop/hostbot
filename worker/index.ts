@@ -109,6 +109,7 @@ app.post("/api/admin/servers",async c=>{
   const endpoint=String(body.endpoint||"").trim();
   if(endpoint&&!endpoint.startsWith("https://"))return c.json({error:"ENDPOINT_MUST_USE_HTTPS"},400);
   const sshHost=String(body.ssh_host||"").trim().slice(0,253)||null;const sshPort=body.ssh_port===undefined?2222:Number(body.ssh_port);
+  if(sshHost&&!/^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])$/.test(sshHost))return c.json({error:"INVALID_SSH_HOST"},400);
   if(!Number.isInteger(sshPort)||sshPort<1||sshPort>65535)return c.json({error:"INVALID_SSH_PORT"},400);
   const token=crypto.randomUUID().replace(/-/g,"")+crypto.randomUUID().replace(/-/g,"");
   const hash=await sha256Hex(token);
@@ -163,7 +164,7 @@ app.delete("/api/terminal/projects/:id/key",async c=>{
 app.get("/api/agent/terminal/keys",async c=>{
  const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);
  const hash=await sha256Hex(token);const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
- const rows=await c.env.DB.prepare("SELECT k.project_id,k.key_blob FROM terminal_ssh_keys k JOIN projects p ON p.id=k.project_id JOIN users u ON u.id=k.user_id LEFT JOIN subscriptions sub ON sub.user_id=u.id AND sub.status=? LEFT JOIN plans plan ON plan.id=sub.plan_id WHERE p.server_id=? AND p.deleted_at IS NULL AND k.revoked_at IS NULL AND (u.terminal_override=1 OR (u.terminal_override IS NULL AND plan.terminal_enabled=1))").bind(node.id).all();
+ const rows=await c.env.DB.prepare("SELECT k.project_id,k.key_blob FROM terminal_ssh_keys k JOIN projects p ON p.id=k.project_id JOIN users u ON u.id=k.user_id LEFT JOIN subscriptions sub ON sub.user_id=u.id AND sub.status=? AND datetime(sub.expires_at)>CURRENT_TIMESTAMP LEFT JOIN plans plan ON plan.id=sub.plan_id WHERE p.server_id=? AND p.deleted_at IS NULL AND k.revoked_at IS NULL AND (u.terminal_override=1 OR (u.terminal_override IS NULL AND plan.terminal_enabled=1))").bind(node.id).all();
  return c.json({keys:(rows.results||[]).map((r:any)=>({username:"hp_"+String(r.project_id).replace(/-/g,""),project_id:r.project_id,key_blob:r.key_blob}))});
 });
 app.get("/api/terminal/access",async c=>{
