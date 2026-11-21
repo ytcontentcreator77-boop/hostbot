@@ -2,7 +2,7 @@ import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import "./style.css";
 declare global { interface Window { Telegram?: { WebApp?: { initData?: string; ready?:()=>void; expand?:()=>void; HapticFeedback?: { impactOccurred:(kind:string)=>void } } } } }
-type Plan={id:number;name:string;badge:string;description:string;price_minor:number;currency:string;duration_days:number;max_projects:number;ram_mb:number;storage_mb:number;max_upload_bytes:number;max_files:number};
+type Plan={id:number;name:string;badge:string;description:string;price_minor:number;currency:string;duration_days:number;max_projects:number;ram_mb:number;storage_mb:number;max_upload_bytes:number;max_file_bytes:number;max_files:number};
 type Dashboard={projects:Array<{status:string;count:number}>;subscription?:{status:string;expires_at:string;plan_name:string};wallet:{balance_minor:number;currency:string};wallets?:Array<{balance_minor:number;currency:string}>};
 const baseTabs=[{id:"home",label:"Home",icon:"⌂"},{id:"projects",label:"Projects",icon:"▣"},{id:"plans",label:"Plans",icon:"◇"},{id:"topup",label:"Top Up",icon:"＋"},{id:"profile",label:"Profile",icon:"◎"}];
 function AdminTerminalPanel(props:{headers:Record<string,string>;telegramId:string;setTelegramId:(v:string)=>void;message:string;setMessage:(v:string)=>void;plans:any[];setPlans:(v:any[])=>void}){
