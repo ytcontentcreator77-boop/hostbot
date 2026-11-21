@@ -40,3 +40,10 @@
 - [ ] End-to-end security testing on a real Telegram bot and isolated VPS nodes
 
 No HTML/static-site hosting and no SMM functionality are in scope. Customer workloads must never execute inside Cloudflare Workers. The current code is a development foundation, not ready for public or paid workloads.
+
+
+## Terminal access
+- [x] Plan-level terminal entitlement field and admin APIs; Silver, Platinum and Gold default to enabled, Free defaults to disabled.
+- [x] Admin per-user override can enable or disable access regardless of plan; `null` restores plan-based access.
+- [x] Mini App only shows the Terminal tab when entitlement is granted; Termux/OpenSSH setup guidance is shown.
+- [ ] Secure per-project SSH key issuance, restricted SSH accounts/commands, revocation and audit trail; interactive terminal sessions must be isolated and resource-limited before launch.
