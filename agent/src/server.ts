@@ -378,6 +378,8 @@ async function pollAgentTasks(){
    const controlAction=String(payload.control_action||"");
    if(["logs","file_list","file_read","file_write","file_delete","file_mkdir"].includes(controlAction)){
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
+   }else if(["github_backup","github_restore"].includes(controlAction)){
+    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
    }else if(controlAction==="backup"&&["create","restore","delete"].includes(payload.backup_action)){
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+(payload.backup_action==="create"?"backup":payload.backup_action==="delete"?"backup_delete":"restore"),payload);
    }else if(!payload.upload_id&&["start","stop","restart"].includes(controlAction)){
