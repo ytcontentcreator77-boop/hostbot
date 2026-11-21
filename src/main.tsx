@@ -1,22 +1,29 @@
 import { render } from "preact";
+import { useEffect, useState } from "preact/hooks";
 import "./style.css";
-
-function App() {
-  return <main class="shell">
-    <header><div class="mark">H</div><div><strong>HostPilot</strong><small>Python & Node.js cloud hosting</small></div></header>
-    <section class="hero">
-      <span class="eyebrow">HOSTING CONTROL CENTER</span>
-      <h1>Your projects.<br /><span>Under control.</span></h1>
-      <p>Deploy and manage Python and Node.js applications from Telegram.</p>
-      <div class="status"><i></i> Control plane initialized</div>
-    </section>
-    <section class="grid">
-      <article><b>Python</b><p>Isolated Python application workloads.</p></article>
-      <article><b>Node.js</b><p>Managed Node.js application workloads.</p></article>
-      <article><b>Projects</b><p>Deployments, logs, files and backups.</p></article>
-      <article><b>Admin</b><p>Plans, billing, users and infrastructure.</p></article>
-    </section>
-    <footer>Open this app from your HostPilot Telegram bot. Setup and authentication are required.</footer>
-  </main>;
+declare global { interface Window { Telegram?: { WebApp?: { initData?: string; ready?:()=>void; expand?:()=>void; HapticFeedback?: { impactOccurred:(kind:string)=>void } } } } }
+type Plan={id:number;name:string;badge:string;description:string;price_minor:number;currency:string;duration_days:number;max_projects:number;ram_mb:number;storage_mb:number;max_upload_bytes:number;max_files:number};
+type Dashboard={projects:Array<{status:string;count:number}>;subscription?:{status:string;expires_at:string;plan_name:string};wallet:{balance_minor:number;currency:string}};
+const tabs=[{id:"home",label:"Home",icon:"⌂"},{id:"projects",label:"Projects",icon:"▣"},{id:"plans",label:"Plans",icon:"◇"},{id:"topup",label:"Top Up",icon:"＋"},{id:"profile",label:"Profile",icon:"◎"}];
+function App(){
+ const [tab,setTab]=useState("home");const [user,setUser]=useState<any>(null);const [dashboard,setDashboard]=useState<Dashboard|null>(null);const [plans,setPlans]=useState<Plan[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState("");
+ const initData=window.Telegram?.WebApp?.initData||"";const headers={"X-Telegram-Init-Data":initData};
+ useEffect(()=>{window.Telegram?.WebApp?.ready?.();window.Telegram?.WebApp?.expand?.();if(!initData){setLoading(false);setError("Open HostPilot from your Telegram bot to sign in securely.");return;}
+ (async()=>{try{const me=await fetch("/api/me",{headers});if(!me.ok)throw new Error("Telegram authentication failed");const meData=await me.json();setUser(meData.user);const [dash,planRes]=await Promise.all([fetch("/api/dashboard",{headers}),fetch("/api/plans")]);if(dash.ok)setDashboard(await dash.json());if(planRes.ok){const data=await planRes.json();setPlans(data.plans||[]);}}catch(e){setError(e instanceof Error?e.message:"Unable to load HostPilot");}finally{setLoading(false);}})();},[]);
+ const openTab=(id:string)=>{window.Telegram?.WebApp?.HapticFeedback?.impactOccurred("light");setTab(id);};
+ const counts=Object.fromEntries((dashboard?.projects||[]).map(x=>[x.status,x.count]));const total=Object.values(counts).reduce((a:any,b:any)=>a+Number(b),0)||0;const money=(dashboard?.wallet?.balance_minor||0)/100;
+ return <main class="app-shell"><header class="topbar"><div class="brand-mark">H</div><div class="brand-copy"><strong>HostPilot</strong><small>Python & Node.js hosting</small></div><span class="secure-pill">● Secure</span></header>
+ {loading?<section class="loading"><div class="loader"></div><p>Loading your hosting dashboard…</p></section>:error?<section class="notice"><b>HostPilot sign-in</b><p>{error}</p></section>:<>
+ {tab==="home"&&<section class="page"><div class="welcome"><div><span class="eyebrow">YOUR CONTROL CENTER</span><h1>Hello, {user?.first_name||"there"} 👋</h1><p>Manage your applications and hosting resources.</p></div><div class="avatar">{(user?.first_name||"H").slice(0,1).toUpperCase()}</div></div>
+ <div class="balance-card"><div><span>WALLET BALANCE</span><h2>{dashboard?.wallet?.currency||"USD"} {money.toFixed(2)}</h2><small>{dashboard?.subscription?.plan_name||"Free"} plan</small></div><button onClick={()=>openTab("topup")}>＋ Top Up</button></div>
+ <div class="section-heading"><h2>Project overview</h2><button class="text-button" onClick={()=>openTab("projects")}>View all</button></div>
+ <div class="stats-grid"><div class="stat"><small>Total</small><b>{total}</b></div><div class="stat"><small>Running</small><b>{counts.running||0}</b></div><div class="stat"><small>Stopped</small><b>{counts.stopped||0}</b></div><div class="stat"><small>Failed</small><b>{counts.failed||0}</b></div></div>
+ <div class="section-heading"><h2>Current subscription</h2></div><article class="panel"><div class="panel-row"><b>{dashboard?.subscription?.plan_name||"Free plan"}</b><span class="tag">{dashboard?.subscription?.status||"No active subscription"}</span></div><p>{dashboard?.subscription?.expires_at?"Expires "+new Date(dashboard.subscription.expires_at).toLocaleDateString():"Choose a plan to unlock more resources."}</p><button class="outline-button" onClick={()=>openTab("plans")}>Explore plans</button></article></section>}
+ {tab==="projects"&&<section class="page"><span class="eyebrow">YOUR WORKLOADS</span><h1>Projects</h1><p class="muted">Host Python and Node.js applications in isolated VPS containers.</p><article class="empty-state"><div class="empty-icon">▣</div><b>Project deployment is being built</b><p>Project manager will support ZIP uploads, environment variables, logs, backups, restarts and rollback.</p><div class="runtime-pills"><span>Python</span><span>Node.js</span></div></article></section>}
+ {tab==="plans"&&<section class="page"><span class="eyebrow">CHOOSE YOUR RESOURCES</span><h1>Hosting plans</h1><p class="muted">Plan limits and prices are managed by HostPilot administrators.</p><div class="plan-list">{plans.map(plan=><article class="plan-card"><div class="panel-row"><b>{plan.name}</b><span class="tag">{plan.badge||"HOSTING"}</span></div><h2>{plan.price_minor===0?"Free":plan.currency+" "+(plan.price_minor/100).toFixed(2)} <small>/ {plan.duration_days} days</small></h2><p>{plan.description}</p><div class="plan-specs"><span>{plan.max_projects} projects</span><span>{plan.ram_mb} MB RAM</span><span>{plan.storage_mb} MB storage</span><span>{plan.max_files} files</span></div></article>)}</div></section>}
+ {tab==="topup"&&<section class="page"><span class="eyebrow">WALLET</span><h1>Top Up</h1><article class="empty-state"><div class="empty-icon">＋</div><b>Payment methods are being configured</b><p>Payment requests, proof uploads, receipts and wallet ledger history will appear here when payment services are implemented.</p></article></section>}
+ {tab==="profile"&&<section class="page"><span class="eyebrow">ACCOUNT</span><h1>Profile</h1><article class="panel profile-card"><div class="avatar large">{(user?.first_name||"H").slice(0,1).toUpperCase()}</div><b>{user?.first_name} {user?.last_name||""}</b><p>@{user?.username||"telegram-user"}</p><small>Telegram ID: {user?.telegram_id}</small><small>Language: {user?.language_code||"en"}</small></article><article class="panel"><b>Account settings</b><p class="muted">Language, notifications, support, referrals and security settings are planned for this section.</p></article></section>}
+ </>}
+ <nav class="bottom-nav">{tabs.map(item=><button class={tab===item.id?"active":""} onClick={()=>openTab(item.id)}><span>{item.icon}</span><small>{item.label}</small></button>)}</nav></main>;
 }
-render(<App />, document.getElementById("app")!);
+render(<App />,document.getElementById("app")!);
