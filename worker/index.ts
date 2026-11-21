@@ -24,7 +24,7 @@ app.get("/api/me", async c => {
       SELECT ?,id,'active',CURRENT_TIMESTAMP,datetime('now','+30 days') FROM plans
       WHERE slug='free' AND NOT EXISTS(SELECT 1 FROM subscriptions WHERE user_id=? AND status='active')`).bind(profile.id,profile.id).run();
   }
-  return c.json({user:profile});
+  const admin=await requireAdmin(c.req.raw,c.env);\n  return c.json({user:profile,is_admin:!!admin});
 });
 app.get("/api/plans",async c=>{
   const result=await c.env.DB.prepare("SELECT id,name,slug,description,badge,price_minor,currency,duration_days,max_projects,max_upload_bytes,max_files,cpu_millicores,ram_mb,storage_mb,allowed_runtimes,enabled FROM plans WHERE enabled=1 ORDER BY sort_order,id").all();
