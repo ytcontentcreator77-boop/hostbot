@@ -98,7 +98,7 @@ app.post("/api/agent/heartbeat",async c=>{
 
 app.get("/api/projects",async c=>{
  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
- const rows=await c.env.DB.prepare("SELECT p.id,p.name,p.runtime,p.runtime_version,p.status,p.entry_file,p.created_at,v.name AS server_name FROM projects p JOIN users u ON u.id=p.user_id LEFT JOIN vps_servers v ON v.id=p.server_id WHERE u.telegram_id=? AND p.deleted_at IS NULL ORDER BY p.created_at DESC").bind(user.id).all();
+ const rows=await c.env.DB.prepare("SELECT p.id,p.name,p.runtime,p.runtime_version,p.status,p.entry_file,(SELECT detected_json FROM project_uploads u WHERE u.project_id=p.id ORDER BY u.created_at DESC LIMIT 1) AS detected_json,p.created_at,v.name AS server_name FROM projects p JOIN users u ON u.id=p.user_id LEFT JOIN vps_servers v ON v.id=p.server_id WHERE u.telegram_id=? AND p.deleted_at IS NULL ORDER BY p.created_at DESC").bind(user.id).all();
  return c.json({projects:rows.results||[]});
 });
 app.post("/api/projects",async c=>{
@@ -128,7 +128,7 @@ app.post("/api/projects",async c=>{
 app.post("/api/projects/:id/upload",async c=>{
  const user=await validateInitData(c.req.header("X-Telegram-Init-Data")||"",c.env.BOT_TOKEN);if(!user)return c.json({error:"UNAUTHORIZED"},401);
  const projectId=c.req.param("id");if(!/^[a-f0-9-]{36}$/i.test(projectId))return c.json({error:"INVALID_PROJECT_ID"},400);
- const project=await c.env.DB.prepare("SELECT p.id,p.server_id,p.runtime,p.runtime_version,p.user_id FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(projectId,user.id).first<{id:string;server_id:number;runtime:string;runtime_version:string;user_id:number}>();
+ const project=await c.env.DB.prepare("SELECT p.id,p.server_id,p.runtime,p.runtime_version,p.user_id,p.resource_limits_json FROM projects p JOIN users u ON u.id=p.user_id WHERE p.id=? AND u.telegram_id=? AND p.deleted_at IS NULL").bind(projectId,user.id).first<{id:string;server_id:number;runtime:string;runtime_version:string;user_id:number}>();
  if(!project)return c.json({error:"PROJECT_NOT_FOUND"},404);
  const plan=await c.env.DB.prepare("SELECT p.max_upload_bytes FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.id DESC LIMIT 1").bind(project.user_id).first<{max_upload_bytes:number}>();
  if(!plan)return c.json({error:"ACTIVE_PLAN_REQUIRED"},403);
@@ -139,7 +139,7 @@ app.post("/api/projects/:id/upload",async c=>{
  const uploadId=crypto.randomUUID();const chunkSize=256*1024;const chunkCount=Math.ceil(bytes.length/chunkSize);const cleanName=file.name.replace(/[^A-Za-z0-9._-]/g,"_").slice(0,120)||"project.zip";
  const statements=[c.env.DB.prepare("INSERT INTO project_uploads(id,project_id,user_id,filename,size_bytes,chunk_count,status) VALUES(?,?,?,?,?,?,'queued')").bind(uploadId,projectId,project.user_id,cleanName,bytes.length,chunkCount)];
  for(let i=0;i<chunkCount;i++){const chunk=bytes.slice(i*chunkSize,Math.min(bytes.length,(i+1)*chunkSize));statements.push(c.env.DB.prepare("INSERT INTO project_upload_chunks(upload_id,chunk_index,chunk_data) VALUES(?,?,?)").bind(uploadId,i,chunk.buffer));}
- await c.env.DB.batch(statements);const taskId=crypto.randomUUID();const payload={upload_id:uploadId,runtime:project.runtime,version:project.runtime_version,cpu_millicores:500,ram_mb:512,pids_limit:128};
+ await c.env.DB.batch(statements);const taskId=crypto.randomUUID();let resources:any={};try{resources=JSON.parse(project.resource_limits_json||"{}");}catch{}const payload={upload_id:uploadId,runtime:project.runtime,version:project.runtime_version,cpu_millicores:resources.cpu_millicores||500,ram_mb:resources.ram_mb||512,pids_limit:128};
  await c.env.DB.prepare("INSERT INTO agent_tasks(id,server_id,project_id,action,payload_json) VALUES(?,?,?,'create',?)").bind(taskId,project.server_id,projectId,JSON.stringify(payload)).run();
  return c.json({ok:true,upload_id:uploadId,task_id:taskId,size_bytes:bytes.length,status:"queued"},202);
 });
@@ -181,7 +181,7 @@ app.post("/api/agent/tasks/:id/result",async c=>{
  const status=body.ok?"succeeded":"failed";
  await c.env.DB.batch([
   c.env.DB.prepare("UPDATE agent_tasks SET status=?,result_json=?,error=?,lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND lease_token=?").bind(status,JSON.stringify(body.result??null).slice(0,8000),String(body.error||"").slice(0,1000)||null,c.req.param("id"),body.lease_token),
-  ...(task.project_id?[c.env.DB.prepare("UPDATE projects SET status=?,entry_file=COALESCE(?,entry_file),startup_command=COALESCE(?,startup_command),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",body.ok&&body.result&&typeof body.result==="object"?(body.result as any).entry_file||null:null,body.ok&&body.result&&typeof body.result==="object"?(body.result as any).startup_command||null:null,task.project_id)]:[]),...(task.action==="create"&&body.ok&&JSON.parse(task.payload_json||"{}").upload_id?[c.env.DB.prepare("UPDATE project_uploads SET status='deployed',detected_json=? WHERE id=?").bind(JSON.stringify(body.result||{}).slice(0,12000),(JSON.parse(task.payload_json||"{}") as any).upload_id)]:[])
+  ...(task.project_id?[c.env.DB.prepare("UPDATE projects SET status=?,entry_file=COALESCE(?,entry_file),startup_command=COALESCE(?,startup_command),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body.ok?(task.action==="delete"?"deleted":task.action==="stop"?"stopped":"running"):"failed",body.ok&&body.result&&typeof body.result==="object"?(body.result as any).entry_file||null:null,body.ok&&body.result&&typeof body.result==="object"?(body.result as any).startup_command||null:null,task.project_id)]:[]),...(task.action==="create"&&body.ok&&JSON.parse(task.payload_json||"{}").upload_id?[c.env.DB.prepare("UPDATE project_uploads SET status='deployed',detected_json=? WHERE id=?").bind(JSON.stringify(body.result||{}).slice(0,12000),(JSON.parse(task.payload_json||"{}") as any).upload_id),c.env.DB.prepare("DELETE FROM project_upload_chunks WHERE upload_id=?").bind((JSON.parse(task.payload_json||"{}") as any).upload_id)]:[])
  ]);
  return c.json({ok:true,status});
 });
