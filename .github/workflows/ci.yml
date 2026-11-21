@@ -12,7 +12,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm install
-      - run: npm run typecheck
-      - run: npm run build
+      - name: Validate control plane
+        run: |
+          npm install
+          npm run typecheck
+          npm run build
+      - name: Validate VPS agent
+        working-directory: agent
+        run: |
+          npm install
+          npm run build
