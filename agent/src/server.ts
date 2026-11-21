@@ -65,7 +65,10 @@ const server=http.createServer(async(req,res)=>{
    if(action==="file_write"){
     if(!relative||typeof input.content_base64!=="string"||input.content_base64.length>90000)throw new Error("INVALID_FILE_WRITE");
     const data=Buffer.from(input.content_base64,"base64");if(data.length>65536)throw new Error("FILE_TOO_LARGE");
-    try{const st=await lstat(target);if(st.isSymbolicLink()||!st.isFile())throw new Error("UNSAFE_FILE_TARGET");}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+    let existingFiles=0,existingBytes=0;const scan=async(dir:string):Promise<void>=>{for(const entry of await readdir(dir,{withFileTypes:true})){if(entry.isSymbolicLink())continue;const full=resolve(dir,entry.name);if(entry.isDirectory())await scan(full);else if(entry.isFile()){const st=await lstat(full);existingFiles++;existingBytes+=st.size;}}};await scan(root);
+    let replacing=false;try{const st=await lstat(target);if(st.isSymbolicLink()||!st.isFile())throw new Error("UNSAFE_FILE_TARGET");replacing=true;existingBytes-=st.size;}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+    const maxFiles=Math.max(1,Math.min(10000,Number(input.max_files||100)));const maxBytes=Math.max(1,Math.min(1024*1024*1024,Number(input.storage_mb||512)*1024*1024));
+    if(!replacing&&existingFiles>=maxFiles)throw new Error("PLAN_FILE_LIMIT_REACHED");if(existingBytes+data.length>maxBytes)throw new Error("PLAN_STORAGE_LIMIT_REACHED");
     await writeFile(target,data,{mode:0o660});reply(res,200,{path:relative,saved:true,size:data.length});return;
    }
    if(action==="file_mkdir"){await mkdir(target,{mode:0o770});reply(res,200,{path:relative,created:true});return;}
