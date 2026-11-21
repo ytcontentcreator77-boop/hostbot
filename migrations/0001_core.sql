@@ -1,0 +1,87 @@
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  telegram_id INTEGER NOT NULL UNIQUE,
+  first_name TEXT NOT NULL DEFAULT '',
+  last_name TEXT,
+  username TEXT,
+  language_code TEXT NOT NULL DEFAULT 'en',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS administrators (
+  telegram_id INTEGER PRIMARY KEY,
+  role TEXT NOT NULL DEFAULT 'owner',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS plans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  price_minor INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  duration_days INTEGER NOT NULL DEFAULT 30,
+  max_projects INTEGER NOT NULL DEFAULT 1,
+  max_upload_bytes INTEGER NOT NULL DEFAULT 1048576,
+  max_files INTEGER NOT NULL DEFAULT 4,
+  cpu_millicores INTEGER NOT NULL DEFAULT 250,
+  ram_mb INTEGER NOT NULL DEFAULT 256,
+  storage_mb INTEGER NOT NULL DEFAULT 512,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS wallets (user_id INTEGER PRIMARY KEY REFERENCES users(id), balance_minor INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'USD');
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  amount_minor INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK(direction IN ('credit','debit')),
+  reason TEXT NOT NULL,
+  reference_type TEXT,
+  reference_id TEXT,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  plan_id INTEGER NOT NULL REFERENCES plans(id),
+  status TEXT NOT NULL DEFAULT 'active',
+  starts_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS vps_servers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  capacity_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  server_id INTEGER REFERENCES vps_servers(id),
+  name TEXT NOT NULL,
+  runtime TEXT NOT NULL CHECK(runtime IN ('python','nodejs')),
+  runtime_version TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'stopped',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  staff_telegram_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  target_type TEXT,
+  target_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  result TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_tx_user ON wallet_transactions(user_id, created_at);
