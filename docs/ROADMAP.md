@@ -18,6 +18,8 @@
 - [x] Provider-neutral multi-VPS inventory API, one-time node enrollment tokens and outbound agent heartbeat with CPU/RAM/OS capacity metadata
 - [x] Durable leased task queue with per-node bearer authentication, lease expiry/retry and result acknowledgement
 - [x] Customer project creation API and Mini App form with plan project-count/runtime checks and automatic healthy-VPS assignment
+- [x] Plan-limited ZIP uploads staged in temporary D1 chunks, transferred only to the assigned VPS agent, then removed from D1 after successful deployment
+- [x] ZIP extraction rejects path traversal, symlinks, encrypted/unsupported archives, oversized entries and excessive expansion; detects Python entry files, requirements.txt/pyproject.toml and Node package.json/start scripts
 - [x] VPS agent outbound task polling and constrained container create action; new projects receive an isolated placeholder container
 - [x] CI workflow configured to typecheck/build the Worker frontend and compile the VPS agent
 - [x] No R2 dependency; customer files/media/backups are assigned to VPS storage
