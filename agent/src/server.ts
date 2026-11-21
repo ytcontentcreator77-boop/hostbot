@@ -144,7 +144,8 @@ const NODE_TOKEN=process.env.NODE_TOKEN||"";
 
 
 function zipCrc32(data:Buffer){let crc=0xffffffff;for(const byte of data){crc^=byte;for(let i=0;i<8;i++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return (crc^0xffffffff)>>>0;}
-async function extractProjectZip(archive:Buffer,id:string){
+function shellQuote(value:string){return "'"+value.replace(/'/g,"'\\''")+"'";}
+async function extractProjectZip(archive:Buffer,id:string,runtime:string){
  if(archive.length<22||archive.length>20*1024*1024)throw new Error("ZIP_SIZE_INVALID");
  let eocd=-1;for(let i=archive.length-22;i>=Math.max(0,archive.length-65557);i--){if(archive.readUInt32LE(i)===0x06054b50){eocd=i;break;}}
  if(eocd<0)throw new Error("ZIP_DIRECTORY_MISSING");
@@ -182,17 +183,17 @@ async function extractProjectZip(archive:Buffer,id:string){
  }
  const filesFound=extracted.sort();const manifests=filesFound.filter(x=>["requirements.txt","pyproject.toml","Pipfile","package.json","package-lock.json","pnpm-lock.yaml","yarn.lock"].includes(x.split("/").pop()||""));
  let entry="",startup="",runtime="python";
- const packagePath=filesFound.includes("package.json")?"package.json":filesFound.find(x=>x.endsWith("/package.json"));
+ const packagePath=runtime==="nodejs"?(filesFound.includes("package.json")?"package.json":filesFound.find(x=>x.endsWith("/package.json"))):undefined;
  if(packagePath){
   runtime="nodejs";const packageData=JSON.parse(await readFile(resolve(root,packagePath),"utf8"));const base=packagePath.includes("/")?packagePath.slice(0,packagePath.lastIndexOf("/"))+"/":"";
   const hasStart=typeof packageData.scripts?.start==="string";entry=base+(typeof packageData.main==="string"?packageData.main:["index.js","main.js","app.js","server.js","src/index.js"].find(x=>filesFound.includes(base+x))||"");
   if(!entry||!filesFound.includes(entry))throw new Error("NODE_ENTRY_FILE_NOT_FOUND");
-  startup="cd /workspace && npm install --omit=dev --no-audit --no-fund && "+(hasStart?"npm start":"node "+JSON.stringify("/workspace/"+entry));
+  startup="cd "+shellQuote("/workspace/"+base)+" && npm install --omit=dev --no-audit --no-fund && "+(hasStart?"npm start":"node "+shellQuote("/workspace/"+entry));
  }else{
   entry=filesFound.find(x=>["main.py","bot.py","app.py","run.py","index.py"].includes(x.split("/").pop()||""))||"";
   if(!entry)throw new Error("PYTHON_ENTRY_FILE_NOT_FOUND");
   const req=filesFound.includes("requirements.txt")?"python -m pip install --disable-pip-version-check --target=/workspace/.hostpilot/python-deps -r /workspace/requirements.txt && PYTHONPATH=/workspace/.hostpilot/python-deps ":"";
-  startup=req+"python /workspace/"+entry;
+  startup=req+"python "+shellQuote("/workspace/"+entry);
  }
  return {entry_file:entry,startup_command:startup,files:filesFound.slice(0,200),manifests,runtime};
 }
@@ -226,7 +227,7 @@ async function pollAgentTasks(){
     const meta=(await metaResponse.json() as any).upload;if(!meta||meta.chunk_count<1||meta.chunk_count>80)throw new Error("UPLOAD_METADATA_INVALID");
     const chunks:Buffer[]=[];
     for(let i=0;i<meta.chunk_count;i++){const response=await fetch(CONTROL_PLANE_URL+"/api/agent/uploads/"+encodeURIComponent(String(payload.upload_id))+"/chunks/"+i,{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error("UPLOAD_CHUNK_DOWNLOAD_FAILED");chunks.push(Buffer.from(await response.arrayBuffer()));}
-    uploadResult=await extractProjectZip(Buffer.concat(chunks),task.project_id);payload.startup_command=uploadResult.startup_command;
+    await signedLocalAgentAction("/v1/projects/"+task.project_id+"/stop",{}).catch(()=>undefined);uploadResult=await extractProjectZip(Buffer.concat(chunks),task.project_id,String(payload.runtime||"python"));payload.startup_command=uploadResult.startup_command;
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/start",payload);
     result={...(result as any),...uploadResult};
    }
