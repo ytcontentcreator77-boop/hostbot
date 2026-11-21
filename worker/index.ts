@@ -163,7 +163,7 @@ app.delete("/api/terminal/projects/:id/key",async c=>{
 app.get("/api/agent/terminal/keys",async c=>{
  const token=(c.req.header("Authorization")||"").replace(/^Bearer /,"");if(token.length<32)return c.json({error:"UNAUTHORIZED"},401);
  const hash=await sha256Hex(token);const node=await c.env.DB.prepare("SELECT id,enabled FROM vps_servers WHERE agent_token_hash=?").bind(hash).first<{id:number;enabled:number}>();if(!node||!node.enabled)return c.json({error:"UNAUTHORIZED"},401);
- const rows=await c.env.DB.prepare("SELECT k.project_id,k.key_blob FROM terminal_ssh_keys k JOIN projects p ON p.id=k.project_id WHERE p.server_id=? AND p.deleted_at IS NULL AND k.revoked_at IS NULL").bind(node.id).all();
+ const rows=await c.env.DB.prepare("SELECT k.project_id,k.key_blob FROM terminal_ssh_keys k JOIN projects p ON p.id=k.project_id JOIN users u ON u.id=k.user_id LEFT JOIN subscriptions sub ON sub.user_id=u.id AND sub.status=? LEFT JOIN plans plan ON plan.id=sub.plan_id WHERE p.server_id=? AND p.deleted_at IS NULL AND k.revoked_at IS NULL AND (u.terminal_override=1 OR (u.terminal_override IS NULL AND plan.terminal_enabled=1))").bind(node.id).all();
  return c.json({keys:(rows.results||[]).map((r:any)=>({username:"hp_"+String(r.project_id).replace(/-/g,""),project_id:r.project_id,key_blob:r.key_blob}))});
 });
 app.get("/api/terminal/access",async c=>{
