@@ -101,8 +101,12 @@ const server=http.createServer(async(req,res)=>{
     reply(res,200,{path:relative,entries:output});return;
    }
    if(action==="file_read"){
-    const st=await lstat(target);if(!st.isFile()||st.isSymbolicLink()||st.size>65536)throw new Error("FILE_NOT_READABLE_OR_TOO_LARGE");
-    const data=await readFile(target);reply(res,200,{path:relative,content_base64:data.toString("base64"),size:st.size});return;
+    const st=await lstat(target);if(!st.isFile()||st.isSymbolicLink())throw new Error("FILE_NOT_READABLE");
+    const offset=Math.max(0,Math.floor(Number(input.offset||0))),length=Math.max(1,Math.min(48*1024,Math.floor(Number(input.length||65536))));
+    if(!Number.isSafeInteger(offset)||offset>st.size)throw new Error("INVALID_FILE_OFFSET");
+    if(st.size>65536&&input.offset===undefined)throw new Error("FILE_REQUIRES_CHUNKED_DOWNLOAD");
+    const data=await open(target,"r").then(async handle=>{try{const buffer=Buffer.alloc(Math.min(length,Math.max(0,st.size-offset)));if(buffer.length)await handle.read(buffer,0,buffer.length,offset);return buffer;}finally{await handle.close();}});
+    reply(res,200,{path:relative,content_base64:data.toString("base64"),size:st.size,offset,next_offset:offset+data.length,eof:offset+data.length>=st.size});return;
    }
    if(action==="file_write"){
     if(!relative||typeof input.content_base64!=="string"||input.content_base64.length>90000)throw new Error("INVALID_FILE_WRITE");
