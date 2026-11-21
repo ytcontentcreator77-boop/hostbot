@@ -15,6 +15,7 @@
 - [x] Wallet ledger service with immutable entries, balance triggers, separate USD ($) and INR (₹) balances only, currency allowlist triggers and idempotent deposit approval foundation
 - [x] Payment request creation and admin wallet adjustment/deposit review API foundations
 - [x] Experimental VPS agent prototype with HMAC signatures, replay protection, runtime image allowlist and constrained Docker containers
+- [x] Provider-neutral multi-VPS inventory API, one-time node enrollment tokens and outbound agent heartbeat with CPU/RAM/OS capacity metadata
 - [x] CI workflow configured to typecheck/build the Worker frontend and compile the VPS agent
 - [x] No R2 dependency; customer files/media/backups are assigned to VPS storage
 
@@ -24,7 +25,7 @@
 - [ ] Complete paginated 28-language picker, translation import/overrides and synchronized bot/Mini App localization
 - [ ] Full customer dashboard metrics, onboarding checklist, notifications and Telegram-native interactions
 - [ ] Project CRUD, ZIP/file uploads, path traversal and zip-bomb validation, encrypted .env management and dependency build pipeline
-- [ ] Production VPS agent enrollment, per-node secrets, signed Worker-to-agent client, mTLS/WireGuard deployment and key rotation
+- [ ] Production VPS agent command channel, signed Worker-to-agent client, mTLS/WireGuard deployment and key rotation
 - [ ] Harden container isolation: rootless Docker, AppArmor/seccomp profiles, egress filtering, disk quotas, image pinning/scanning and abuse detection
 - [ ] Python/Node dependency installation, build caching, logs/console streaming, metrics, health checks, crash-loop controls and resource reporting
 - [ ] VPS scheduler, capacity-aware placement, node health, live migration and failover
