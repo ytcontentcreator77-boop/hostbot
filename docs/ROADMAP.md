@@ -32,11 +32,11 @@
 - [ ] Complete project CRUD, ZIP/file uploads, path traversal and zip-bomb validation, encrypted .env management and dependency build pipeline
 - [ ] Harden task channel with idempotent execution, mTLS/WireGuard deployment, node key rotation and operational alerting
 - [ ] Harden container isolation: rootless Docker, AppArmor/seccomp profiles, egress filtering, disk quotas, image pinning/scanning and abuse detection
-- [x] Initial VPS-backed project file browser/editor, project start/stop/restart controls and bounded container log retrieval through leased agent tasks\n- [ ] True streaming build output, interactive browser console, file upload/download for arbitrary individual files, directory upload and full file-manager UX hardening\n- [ ] Python/Node dependency installation, build caching, metrics, health checks, crash-loop controls and resource reporting
+- [x] Initial VPS-backed project file browser/editor, project start/stop/restart controls and bounded container log retrieval through leased agent tasks\n- [ ] True streaming build output, interactive browser console, larger/binary individual file uploads, directory upload, pagination and full file-manager UX hardening\n- [ ] Python/Node dependency installation, build caching, metrics, health checks, crash-loop controls and resource reporting
 - [ ] Advanced VPS scheduler with resource-aware placement, quotas, node health, live migration and failover
 - [ ] VPS-backed file manager, project backups, retention, restore, export/import and off-node replication
 - [ ] Full responsive Admin Panel with granular staff roles, permissions and complete audit logging
-- [ ] Plans editor for price, currency, duration, project count, CPU, RAM, storage, upload, file, dependency and runtime-version limits
+- [x] Admin editor for per-plan project count, file count, upload size, CPU, RAM and VPS storage limits\n- [ ] Complete plans editor for price, currency, duration, dependency and runtime-version limits
 - [ ] Complete wallet UI, payment-method editor, proof uploads, receipts, refunds and verified eSewa/Khalti/UPI/Stars/manual gateways
 - [ ] Subscription lifecycle, renewal, expiry notifications, grace periods, suspension and vouchers
 - [ ] Fully working announcement, campaign, bonus, coupon, broadcast and backup admin interfaces (schema exists; UI/workflows remain)
