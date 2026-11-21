@@ -165,7 +165,7 @@ app.get("/api/agent/tasks",async c=>{
  const candidate=await c.env.DB.prepare("SELECT id FROM agent_tasks WHERE server_id=? AND status='queued' ORDER BY created_at LIMIT 1").bind(node.id).first<{id:string}>();
  if(!candidate)return c.json({task:null});
  const lease=crypto.randomUUID();
- const claimed=await c.env.DB.prepare("UPDATE agent_tasks SET status='leased',lease_token=?,lease_expires_at=datetime('now','+90 seconds'),attempts=attempts+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND server_id=? AND status='queued'").bind(lease,candidate.id,node.id).run();
+ const claimed=await c.env.DB.prepare("UPDATE agent_tasks SET status='leased',lease_token=?,lease_expires_at=datetime('now','+15 minutes'),attempts=attempts+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND server_id=? AND status='queued'").bind(lease,candidate.id,node.id).run();
  if(!claimed.meta.changes)return c.json({task:null});
  const task=await c.env.DB.prepare("SELECT id,project_id,action,payload_json,lease_token FROM agent_tasks WHERE id=? AND server_id=?").bind(candidate.id,node.id).first<any>();
  return c.json({task});
