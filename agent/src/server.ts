@@ -11,7 +11,8 @@ import { Server as SSHServer } from "ssh2";
 
 const execFileAsync=promisify(execFile);
 const PORT=Number(process.env.PORT||8788);
-const SECRET=process.env.HOSTPILOT_AGENT_SECRET||"";\nconst GITHUB_TOKEN=process.env.GITHUB_TOKEN||"";
+const SECRET=process.env.HOSTPILOT_AGENT_SECRET||"";
+const GITHUB_TOKEN=process.env.GITHUB_TOKEN||"";
 const PROJECT_ROOT=resolve(process.env.PROJECT_ROOT||"/srv/hostpilot/projects");
 const DOCKER_SOCKET=process.env.DOCKER_SOCKET||process.env.DOCKER_HOST||"/run/user/1000/docker.sock";
 const docker=new Docker(DOCKER_SOCKET.startsWith("unix://")?{socketPath:DOCKER_SOCKET.slice(7)}:{socketPath:DOCKER_SOCKET});
