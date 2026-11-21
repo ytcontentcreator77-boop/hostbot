@@ -8,6 +8,8 @@
 - [x] Telegram Mini App initData HMAC validation
 - [x] Basic profile, plans and dashboard APIs
 - [x] Basic customer Mini App with Dashboard, Projects, Plans, Top Up and Profile navigation
+- [x] Enabled language list and language preference APIs
+- [x] Default wallet and Free subscription provisioning on first authenticated Mini App visit
 - [x] Owner/admin authorization foundation and admin overview API
 - [x] Telegram webhook secret-header verification
 - [x] Wallet ledger service with immutable entries, balance triggers, multi-currency balances and idempotent deposit approval foundation
