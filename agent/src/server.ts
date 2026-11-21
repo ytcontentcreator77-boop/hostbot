@@ -1,8 +1,8 @@
 import http from "node:http";
 import { createHash, createHmac, timingSafeEqual, randomUUID, generateKeyPairSync } from "node:crypto";
-import { mkdir, realpath, statfs, readFile, writeFile, rm, readdir, lstat } from "node:fs/promises";
+import { mkdir, realpath, statfs, readFile, writeFile, rm, readdir, lstat, open, rename } from "node:fs/promises";
 import { inflateRawSync } from "node:zlib";
-import { resolve, sep } from "node:path";
+import { resolve, sep, dirname } from "node:path";
 import os from "node:os";
 import Docker from "dockerode";
 import { Server as SSHServer } from "ssh2";
@@ -260,12 +260,48 @@ async function pollAgentTasks(){
    if(payload.upload_id){
     const metaResponse=await fetch(CONTROL_PLANE_URL+"/api/agent/uploads/"+encodeURIComponent(String(payload.upload_id)),{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(15000)});
     if(!metaResponse.ok)throw new Error("UPLOAD_METADATA_UNAVAILABLE");
-    const meta=(await metaResponse.json() as any).upload;if(!meta||meta.chunk_count<1||meta.chunk_count>80)throw new Error("UPLOAD_METADATA_INVALID");
-    const chunks:Buffer[]=[];
-    for(let i=0;i<meta.chunk_count;i++){const response=await fetch(CONTROL_PLANE_URL+"/api/agent/uploads/"+encodeURIComponent(String(payload.upload_id))+"/chunks/"+i,{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error("UPLOAD_CHUNK_DOWNLOAD_FAILED");chunks.push(Buffer.from(await response.arrayBuffer()));}
-    await signedLocalAgentAction("/v1/projects/"+task.project_id+"/stop",{}).catch(()=>undefined);uploadResult=await extractProjectZip(Buffer.concat(chunks),task.project_id,String(payload.runtime||"python"),Number(payload.max_files||500),Number(payload.storage_mb||100));payload.startup_command=uploadResult.startup_command;
-    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/start",payload);
-    result={...(result as any),...uploadResult};
+    const meta=(await metaResponse.json() as any).upload;
+    if(!meta||!Number.isInteger(meta.chunk_count)||meta.chunk_count<1)throw new Error("UPLOAD_METADATA_INVALID");
+    if(payload.file_upload){
+     if(meta.chunk_count>2048||Number(meta.size_bytes)<1||Number(meta.size_bytes)>Math.min(500*1024*1024,Number(payload.max_file_bytes||0)))throw new Error("PLAN_FILE_SIZE_LIMIT");
+     let metadata:any={};try{metadata=JSON.parse(meta.detected_json||"{}");}catch{}
+     const relative=String(metadata.path||payload.path||"");
+     if(metadata.kind!=="file"||!relative||relative.length>512||relative.startsWith("/")||relative.split("/").some((part:string)=>!part||part==="."||part===".."))throw new Error("INVALID_FILE_PATH");
+     const root=await projectDirectory(task.project_id),target=resolve(root,relative);
+     if(target!==root&&!target.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");
+     await mkdir(dirname(target),{recursive:true,mode:0o770});
+     const parent=await realpath(dirname(target));if(parent!==root&&!parent.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");
+     let replacing=false,oldSize=0;
+     try{const st=await lstat(target);if(st.isSymbolicLink()||!st.isFile())throw new Error("UNSAFE_FILE_TARGET");replacing=true;oldSize=st.size;}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+     let existingFiles=0,existingBytes=0;
+     const scan=async(dir:string):Promise<void>=>{for(const entry of await readdir(dir,{withFileTypes:true})){if(entry.isSymbolicLink())continue;const full=resolve(dir,entry.name);if(entry.isDirectory())await scan(full);else if(entry.isFile()){const st=await lstat(full);existingFiles++;existingBytes+=st.size;}}};
+     await scan(root);
+     const maxFiles=Math.max(1,Math.min(10000,Number(payload.max_files||100)));
+     const maxBytes=Math.max(1,Math.min(1024*1024*1024,Number(payload.storage_mb||512)*1024*1024));
+     if(!replacing&&existingFiles>=maxFiles)throw new Error("PLAN_FILE_LIMIT_REACHED");
+     if(existingBytes-oldSize+Number(meta.size_bytes)>maxBytes)throw new Error("PLAN_STORAGE_LIMIT_REACHED");
+     const temp=target+".hostpilot-"+randomUUID()+".tmp";let handle:Awaited<ReturnType<typeof open>>|undefined;let written=0;
+     try{
+      handle=await open(temp,"wx",0o660);
+      for(let i=0;i<meta.chunk_count;i++){
+       const response=await fetch(CONTROL_PLANE_URL+"/api/agent/uploads/"+encodeURIComponent(String(payload.upload_id))+"/chunks/"+i,{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(60000)});
+       if(!response.ok)throw new Error("UPLOAD_CHUNK_DOWNLOAD_FAILED");
+       const chunk=Buffer.from(await response.arrayBuffer());if(chunk.length>256*1024||written+chunk.length>Number(meta.size_bytes))throw new Error("UPLOAD_CHUNK_INVALID");
+       await handle.write(chunk);written+=chunk.length;
+      }
+      await handle.sync();await handle.close();handle=undefined;
+      if(written!==Number(meta.size_bytes))throw new Error("UPLOAD_SIZE_MISMATCH");
+      await rename(temp,target);
+     }catch(error){if(handle)await handle.close().catch(()=>undefined);await rm(temp,{force:true}).catch(()=>undefined);throw error;}
+     result={path:relative,size:written,uploaded:true};
+    }else{
+     if(meta.chunk_count>80)throw new Error("UPLOAD_METADATA_INVALID");
+     const chunks:Buffer[]=[];
+     for(let i=0;i<meta.chunk_count;i++){const response=await fetch(CONTROL_PLANE_URL+"/api/agent/uploads/"+encodeURIComponent(String(payload.upload_id))+"/chunks/"+i,{headers:{authorization:"Bearer "+NODE_TOKEN},signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error("UPLOAD_CHUNK_DOWNLOAD_FAILED");chunks.push(Buffer.from(await response.arrayBuffer()));}
+     await signedLocalAgentAction("/v1/projects/"+task.project_id+"/stop",{}).catch(()=>undefined);uploadResult=await extractProjectZip(Buffer.concat(chunks),task.project_id,String(payload.runtime||"python"),Number(payload.max_files||500),Number(payload.storage_mb||100));payload.startup_command=uploadResult.startup_command;
+     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/start",payload);
+     result={...(result as any),...uploadResult};
+    }
    }
    const controlAction=String(payload.control_action||"");
    if(["logs","file_list","file_read","file_write","file_delete","file_mkdir"].includes(controlAction)){
