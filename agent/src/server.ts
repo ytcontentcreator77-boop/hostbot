@@ -1,6 +1,6 @@
 import http from "node:http";
 import { createHash, createHmac, timingSafeEqual, randomUUID, generateKeyPairSync } from "node:crypto";
-import { mkdir, realpath, statfs, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, realpath, statfs, readFile, writeFile, rm, readdir, lstat } from "node:fs/promises";
 import { inflateRawSync } from "node:zlib";
 import { resolve, sep } from "node:path";
 import os from "node:os";
@@ -42,6 +42,38 @@ const server=http.createServer(async(req,res)=>{
   const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status)$/i);
   if(req.method!=="POST"||!match){reply(res,404,{error:"NOT_FOUND"});return;}
   const id=safeId(match[1]);const action=match[2];const name="hp-"+id;
+
+  if(["logs","file_list","file_read","file_write","file_delete","file_mkdir"].includes(action)){
+   const input=raw?JSON.parse(raw):{};const root=await projectDirectory(id);const relative=String(input.path||"");
+   if(relative.length>512||relative.startsWith("/")||relative.split("/").some((part:string)=>part===".."||part==="."))throw new Error("INVALID_FILE_PATH");
+   const target=resolve(root,relative||".");if(target!==root&&!target.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");
+   const parent=resolve(target,"..");const realParent=await realpath(parent);if(realParent!==root&&!realParent.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");
+   if(action==="logs"){
+    const container=await getContainer(id);const info=await container.inspect();const logs=await container.logs({stdout:true,stderr:true,tail:250,timestamps:true});
+    reply(res,200,{id,status:info.State.Status,logs:Buffer.from(logs).toString("utf8").slice(-160000)});return;
+   }
+   if(action==="file_list"){
+    const dir=await realpath(target);if(dir!==root&&!dir.startsWith(root+sep))throw new Error("INVALID_FILE_PATH");
+    const entries=await readdir(dir,{withFileTypes:true});const output=[];
+    for(const entry of entries.slice(0,300)){if(entry.isSymbolicLink())continue;const full=resolve(dir,entry.name);const st=await lstat(full);output.push({name:entry.name,type:entry.isDirectory()?"directory":"file",size:st.isFile()?st.size:0});}
+    reply(res,200,{path:relative,entries:output});return;
+   }
+   if(action==="file_read"){
+    const st=await lstat(target);if(!st.isFile()||st.isSymbolicLink()||st.size>65536)throw new Error("FILE_NOT_READABLE_OR_TOO_LARGE");
+    const data=await readFile(target);reply(res,200,{path:relative,content_base64:data.toString("base64"),size:st.size});return;
+   }
+   if(action==="file_write"){
+    if(!relative||typeof input.content_base64!=="string"||input.content_base64.length>90000)throw new Error("INVALID_FILE_WRITE");
+    const data=Buffer.from(input.content_base64,"base64");if(data.length>65536)throw new Error("FILE_TOO_LARGE");
+    try{const st=await lstat(target);if(st.isSymbolicLink()||!st.isFile())throw new Error("UNSAFE_FILE_TARGET");}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+    await writeFile(target,data,{mode:0o660});reply(res,200,{path:relative,saved:true,size:data.length});return;
+   }
+   if(action==="file_mkdir"){await mkdir(target,{mode:0o770});reply(res,200,{path:relative,created:true});return;}
+   if(action==="file_delete"){
+    const st=await lstat(target);if(st.isSymbolicLink()||(!st.isFile()&&!st.isDirectory()))throw new Error("UNSAFE_FILE_TARGET");
+    await rm(target,{recursive:false,force:false});reply(res,200,{path:relative,deleted:true});return;
+   }
+  }
   if(action==="status"){
    try{const info=await (await getContainer(id)).inspect();reply(res,200,{id,status:info.State.Status,running:info.State.Running,exitCode:info.State.ExitCode});}
    catch{reply(res,200,{id,status:"not_created",running:false});}return;
@@ -232,9 +264,15 @@ async function pollAgentTasks(){
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/start",payload);
     result={...(result as any),...uploadResult};
    }
-   const action=payload.upload_id?"upload_done":(task.action==="create"?"start":task.action);
+   const controlAction=String(payload.control_action||"");
+   if(["logs","file_list","file_read","file_write","file_delete","file_mkdir"].includes(controlAction)){
+    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
+   }else if(!payload.upload_id&&["start","stop","restart"].includes(controlAction)){
+    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
+   }
+   const action=payload.upload_id?"upload_done":(controlAction?"control_done":(task.action==="create"?"start":task.action));
    if(action!=="upload_done"&&!["start","stop","restart","delete"].includes(action))throw new Error("UNSUPPORTED_TASK_ACTION");
-   if(action!=="upload_done")result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+action,payload);
+   if(action!=="upload_done"&&action!=="control_done")result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+action,payload);
   }catch(e){error=e instanceof Error?e.message:"AGENT_TASK_FAILED";}
   const ack=await fetch(CONTROL_PLANE_URL+"/api/agent/tasks/"+task.id+"/result",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+NODE_TOKEN},body:JSON.stringify({lease_token:task.lease_token,ok:!error,result,error}),signal:AbortSignal.timeout(10000)});
   if(!ack.ok)process.stderr.write("HostPilot task acknowledgement failed: "+ack.status+"\n");
