@@ -13,7 +13,7 @@ Telegram-based Python and Node.js cloud hosting control plane.
 **No Cloudflare R2 is used.** No HTML/static-site hosting or SMM features are included.
 
 ## Current development status
-The repository contains a customer Mini App, Worker APIs, D1 migrations, wallet-ledger foundations, admin user/VPS controls, a provider-neutral VPS agent, project file management and plan-limited chunked individual-file uploads (up to the configured 500 MB per-file ceiling). Large-file downloads, full payment workflows, automated backup retention/export, advanced admin modules and production security certification remain incomplete. The Admin Panel now includes a VPS backup inventory and audited restore queue. It is not production-ready. See [the roadmap](docs/ROADMAP.md) and [deployment guide](docs/DEPLOYMENT.md).
+The development branch now includes chunked individual-file uploads and downloads, dependency-aware project rebuilds with container logs, VPS tar backup/restore and retention cleanup, optional GitHub branch backup/restore, admin JSON export/import, announcement and scheduled campaign management, coupon management, payment-method administration, customer top-up requests, payment review and plan resource/price editing. GitHub backups require a `GITHUB_TOKEN` configured only in the VPS agent environment. These workflows have not yet passed CI or real-VPS integration testing and are not production-certified. See [the roadmap](docs/ROADMAP.md) and [deployment guide](docs/DEPLOYMENT.md).
 
 ## Quick start
 1. Install Node.js 24+ and run `npm install`.
