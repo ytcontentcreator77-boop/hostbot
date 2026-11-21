@@ -647,11 +647,11 @@ app.post("/api/admin/announcements",async c=>{
 app.put("/api/admin/announcements/:id",async c=>{
  const admin=await requireAdmin(c.req.raw,c.env);if(!admin)return c.json({error:"FORBIDDEN"},403);
  const b=await c.req.json<any>().catch(()=>null);if(!b)return c.json({error:"INVALID_ANNOUNCEMENT"},400);
- const current=await c.env.DB.prepare("SELECT id FROM announcements WHERE id=?").bind(c.req.param("id")).first();if(!current)return c.json({error:"NOT_FOUND"},404);
+ const current=await c.env.DB.prepare("SELECT * FROM announcements WHERE id=?").bind(c.req.param("id")).first<any>();if(!current)return c.json({error:"NOT_FOUND"},404);
  const buttonEnabled=!!b.button_enabled,buttonText=String(b.button_text||"").trim().slice(0,40),buttonUrl=String(b.button_url||"").trim();
  if(buttonEnabled&&(!buttonText||!/^https:\/\//i.test(buttonUrl)))return c.json({error:"BUTTON_REQUIRES_HTTPS_URL"},400);
  await c.env.DB.prepare("UPDATE announcements SET title=?,description=?,image_url=?,button_text=?,button_url=?,button_enabled=?,enabled=?,starts_at=?,ends_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
- .bind(String(b.title||"").trim().slice(0,160),String(b.description||"").slice(0,4000),String(b.image_url||"").slice(0,1000)||null,buttonText||null,buttonUrl||null,buttonEnabled?1:0,b.enabled===false?0:1,b.starts_at||null,b.ends_at||null,c.req.param("id")).run();
+ .bind(String(b.title===undefined?current.title:b.title).trim().slice(0,160),String(b.description===undefined?current.description:b.description).slice(0,4000),String((b.image_url===undefined?current.image_url:b.image_url)||"").slice(0,1000)||null,String((b.button_text===undefined?current.button_text:b.button_text)||"").slice(0,40)||null,String((b.button_url===undefined?current.button_url:b.button_url)||"").slice(0,1000)||null,(b.button_enabled===undefined?current.button_enabled:(buttonEnabled?1:0)),(b.enabled===undefined?current.enabled:(b.enabled===false?0:1)),(b.starts_at===undefined?current.starts_at:b.starts_at),(b.ends_at===undefined?current.ends_at:b.ends_at),c.req.param("id")).run();
  return c.json({ok:true});
 });
 app.delete("/api/admin/announcements/:id",async c=>{
@@ -760,9 +760,30 @@ async function runBackupRetention(db:D1Database){
  }
  return queued;
 }
+async function runCampaignDelivery(env:Env){
+ const due=await env.DB.prepare("SELECT * FROM campaigns WHERE status='scheduled' AND scheduled_at IS NOT NULL AND datetime(scheduled_at)<=CURRENT_TIMESTAMP ORDER BY scheduled_at LIMIT 3").all<any>();
+ for(const campaign of due.results||[]){
+  const lock=await env.DB.prepare("UPDATE campaigns SET status='sending' WHERE id=? AND status='scheduled'").bind(campaign.id).run();
+  if(!lock.meta.changes)continue;
+  let payload:any={};try{payload=JSON.parse(campaign.payload_json||"{}");}catch{}
+  let recipients:any;
+  if(campaign.audience==="premium")recipients=await env.DB.prepare("SELECT DISTINCT u.telegram_id FROM users u JOIN subscriptions s ON s.user_id=u.id JOIN plans p ON p.id=s.plan_id WHERE s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP AND p.slug<>'free' LIMIT 1000").all();
+  else if(campaign.audience==="free")recipients=await env.DB.prepare("SELECT u.telegram_id FROM users u WHERE NOT EXISTS(SELECT 1 FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=u.id AND s.status='active' AND datetime(s.expires_at)>CURRENT_TIMESTAMP AND p.slug<>'free') LIMIT 1000").all();
+  else recipients=await env.DB.prepare("SELECT telegram_id FROM users WHERE status='active' LIMIT 1000").all();
+  let sent=0,failed=0;
+  for(const user of recipients.results||[]){
+   const message=[campaign.title,campaign.description].filter(Boolean).join("\\n\\n");
+   const keyboard=payload.button_text&&payload.button_url?{inline_keyboard:[[{text:String(payload.button_text).slice(0,40),url:String(payload.button_url)}]]}:undefined;
+   const method=payload.image_url?"sendPhoto":"sendMessage";
+   const params:any=payload.image_url?{chat_id:user.telegram_id,photo:payload.image_url,caption:message,reply_markup:keyboard}:{chat_id:user.telegram_id,text:message,reply_markup:keyboard,disable_web_page_preview:true};
+   try{const response=await fetch("https://api.telegram.org/bot"+env.BOT_TOKEN+"/"+method,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(params)});const result:any=await response.json();if(result.ok)sent++;else failed++;}catch{failed++;}
+  }
+  await env.DB.prepare("UPDATE campaigns SET status='sent',sent_at=CURRENT_TIMESTAMP,payload_json=? WHERE id=? AND status='sending'").bind(JSON.stringify({...payload,delivery:{sent,failed}}),campaign.id).run();
+ }
+}
 export default {
  fetch: app.fetch,
  async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext){
-  ctx.waitUntil(runBackupRetention(env.DB).catch(error=>console.error("HostPilot backup retention failed",error)));
+  ctx.waitUntil(Promise.all([runBackupRetention(env.DB).catch(error=>console.error("HostPilot backup retention failed",error)),runCampaignDelivery(env).catch(error=>console.error("HostPilot campaign delivery failed",error))]));
  }
 };
