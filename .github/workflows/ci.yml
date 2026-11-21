@@ -1,7 +1,7 @@
 name: HostPilot CI
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
     branches: [main]
 jobs:
@@ -12,11 +12,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Validate setup script
+        run: bash -n scripts/setup.sh
       - name: Validate control plane
         run: |
           npm install
           npm run typecheck
           npm run build
+          npx wrangler d1 migrations apply hostpilot --local
       - name: Validate VPS agent
         working-directory: agent
         run: |

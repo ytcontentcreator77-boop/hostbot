@@ -12,6 +12,8 @@ import { Server as SSHServer } from "ssh2";
 const execFileAsync=promisify(execFile);
 const PORT=Number(process.env.PORT||8788);
 const SECRET=process.env.HOSTPILOT_AGENT_SECRET||"";
+const GITHUB_TOKEN=process.env.GITHUB_TOKEN||"";
+const GITHUB_BACKUP_REPOSITORY=process.env.GITHUB_BACKUP_REPOSITORY||"";
 const PROJECT_ROOT=resolve(process.env.PROJECT_ROOT||"/srv/hostpilot/projects");
 const DOCKER_SOCKET=process.env.DOCKER_SOCKET||process.env.DOCKER_HOST||"/run/user/1000/docker.sock";
 const docker=new Docker(DOCKER_SOCKET.startsWith("unix://")?{socketPath:DOCKER_SOCKET.slice(7)}:{socketPath:DOCKER_SOCKET});
@@ -42,10 +44,45 @@ const server=http.createServer(async(req,res)=>{
   const raw=await readBody(req);
   if(req.method==="GET"&&req.url==="/health"){reply(res,200,{ok:true,agent:"hostpilot-node-agent"});return;}
   if(!verify(req,raw)){reply(res,401,{error:"INVALID_AGENT_SIGNATURE"});return;}
-  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir|backup|restore)$/i);
+  const match=(req.url||"").match(/^\/v1\/projects\/([a-f0-9-]{36})\/(start|stop|restart|delete|status|logs|file_list|file_read|file_write|file_delete|file_mkdir|backup|restore|backup_delete|github_backup|github_restore)$/i);
   if(req.method!=="POST"||!match){reply(res,404,{error:"NOT_FOUND"});return;}
   const id=safeId(match[1]);const action=match[2];const name="hp-"+id;
 
+  if(action==="github_backup"||action==="github_restore"){
+   const input=raw?JSON.parse(raw):{};const root=await projectDirectory(id);const repository=String(input.repository||"").trim();const branchName="hostpilot-"+id;
+   if(!GITHUB_TOKEN)throw new Error("GITHUB_BACKUP_TOKEN_NOT_CONFIGURED_ON_AGENT");
+   if(!GITHUB_BACKUP_REPOSITORY||repository!==GITHUB_BACKUP_REPOSITORY)throw new Error("GITHUB_REPOSITORY_NOT_ALLOWED_ON_AGENT");
+   if(!/^[A-Za-z0-9_.-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(repository)||!/^[-A-Za-z0-9._/]{1,100}$/.test(branchName)||branchName.includes(".."))throw new Error("INVALID_GITHUB_REPOSITORY_OR_BRANCH");
+   const backupRoot=resolve(PROJECT_ROOT,"..","backups",id);await mkdir(backupRoot,{recursive:true,mode:0o700});
+   const staging=resolve(backupRoot,"github-"+randomUUID());const remote="https://github.com/"+repository+".git";
+   const auth="AUTHORIZATION: basic "+Buffer.from("x-access-token:"+GITHUB_TOKEN).toString("base64");
+   const git=async(args:string[],cwd?:string)=>execFileAsync("git",args,{cwd,env:{...process.env,GIT_CONFIG_COUNT:"1",GIT_CONFIG_KEY_0:"http.extraheader",GIT_CONFIG_VALUE_0:auth},timeout:600000,maxBuffer:4*1024*1024});
+   try{
+    if(action==="github_backup"){
+     try{await git(["clone","--depth","1","--branch",branchName,remote,staging]);}catch{await rm(staging,{recursive:true,force:true});await mkdir(staging,{recursive:true,mode:0o700});await git(["init",staging]);await git(["-C",staging,"remote","add","origin",remote]);}
+     await cp(root,staging,{recursive:true,force:true,filter:(source)=>{const rel=source.slice(root.length).split(sep);return !rel.some(part=>[".git","node_modules",".venv","__pycache__",".hostpilot"].includes(part));}});
+     await git(["-C",staging,"config","user.name","HostPilot Backup"]);await git(["-C",staging,"config","user.email","backup@hostpilot.invalid"]);
+     await git(["-C",staging,"add","-A"]);
+     try{await git(["-C",staging,"commit","-m","HostPilot project backup "+new Date().toISOString()]);}catch(error){if(!String(error).includes("nothing to commit"))throw error;}
+     await git(["-C",staging,"push","-u","origin","HEAD:refs/heads/"+branchName]);
+     reply(res,200,{repository,branch:branchName,backed_up:true});return;
+    }
+    await git(["clone","--depth","1","--branch",branchName,remote,staging]);
+    const entries=await readdir(staging,{withFileTypes:true});
+    for(const entry of await readdir(root))await rm(resolve(root,entry),{recursive:true,force:true});
+    for(const entry of entries){if(entry.name===".git")continue;await cp(resolve(staging,entry.name),resolve(root,entry.name),{recursive:true,force:true});}
+    reply(res,200,{repository,branch:branchName,restored:true});return;
+   }finally{await rm(staging,{recursive:true,force:true}).catch(()=>undefined);}
+  }
+  if(action==="backup_delete"){
+   const input=raw?JSON.parse(raw):{};const backupId=String(input.backup_id||"");
+   if(!/^[a-f0-9-]{36}$/i.test(backupId))throw new Error("INVALID_BACKUP_ID");
+   const backupRoot=resolve(PROJECT_ROOT,"..","backups",id),archive=resolve(backupRoot,backupId+".tar.gz");
+   if(!archive.startsWith(backupRoot+sep))throw new Error("INVALID_BACKUP_PATH");
+   try{const st=await lstat(archive);if(st.isSymbolicLink()||!st.isFile())throw new Error("BACKUP_ARCHIVE_INVALID");await rm(archive,{force:true});}
+   catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+   reply(res,200,{backup_id:backupId,deleted:true});return;
+  }
   if(action==="backup"||action==="restore"){
    const input=raw?JSON.parse(raw):{};const backupId=String(input.backup_id||"");
    if(!/^[a-f0-9-]{36}$/i.test(backupId))throw new Error("INVALID_BACKUP_ID");
@@ -92,8 +129,12 @@ const server=http.createServer(async(req,res)=>{
     reply(res,200,{path:relative,entries:output});return;
    }
    if(action==="file_read"){
-    const st=await lstat(target);if(!st.isFile()||st.isSymbolicLink()||st.size>65536)throw new Error("FILE_NOT_READABLE_OR_TOO_LARGE");
-    const data=await readFile(target);reply(res,200,{path:relative,content_base64:data.toString("base64"),size:st.size});return;
+    const st=await lstat(target);if(!st.isFile()||st.isSymbolicLink())throw new Error("FILE_NOT_READABLE");
+    const offset=Math.max(0,Math.floor(Number(input.offset||0))),length=Math.max(1,Math.min(48*1024,Math.floor(Number(input.length||65536))));
+    if(!Number.isSafeInteger(offset)||offset>st.size)throw new Error("INVALID_FILE_OFFSET");
+    if(st.size>65536&&input.offset===undefined)throw new Error("FILE_REQUIRES_CHUNKED_DOWNLOAD");
+    const data=await open(target,"r").then(async handle=>{try{const buffer=Buffer.alloc(Math.min(length,Math.max(0,st.size-offset)));if(buffer.length)await handle.read(buffer,0,buffer.length,offset);return buffer;}finally{await handle.close();}});
+    reply(res,200,{path:relative,content_base64:data.toString("base64"),size:st.size,offset,next_offset:offset+data.length,eof:offset+data.length>=st.size});return;
    }
    if(action==="file_write"){
     if(!relative||typeof input.content_base64!=="string"||input.content_base64.length>90000)throw new Error("INVALID_FILE_WRITE");
@@ -339,8 +380,10 @@ async function pollAgentTasks(){
    const controlAction=String(payload.control_action||"");
    if(["logs","file_list","file_read","file_write","file_delete","file_mkdir"].includes(controlAction)){
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
-   }else if(controlAction==="backup"&&["create","restore"].includes(payload.backup_action)){
-    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+(payload.backup_action==="create"?"backup":"restore"),payload);
+   }else if(["github_backup","github_restore"].includes(controlAction)){
+    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
+   }else if(controlAction==="backup"&&["create","restore","delete"].includes(payload.backup_action)){
+    result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+(payload.backup_action==="create"?"backup":payload.backup_action==="delete"?"backup_delete":"restore"),payload);
    }else if(!payload.upload_id&&["start","stop","restart"].includes(controlAction)){
     result=await signedLocalAgentAction("/v1/projects/"+task.project_id+"/"+controlAction,payload);
    }

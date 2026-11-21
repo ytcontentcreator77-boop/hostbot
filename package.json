@@ -9,7 +9,8 @@
     "deploy": "npm run build && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply hostpilot --local",
     "db:migrate:remote": "wrangler d1 migrations apply hostpilot --remote",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "setup": "bash scripts/setup.sh"
   },
   "dependencies": {
     "hono": "^4.7.2",
