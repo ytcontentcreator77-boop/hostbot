@@ -16,6 +16,9 @@
 - [x] Payment request creation and admin wallet adjustment/deposit review API foundations
 - [x] Experimental VPS agent prototype with HMAC signatures, replay protection, runtime image allowlist and constrained Docker containers
 - [x] Provider-neutral multi-VPS inventory API, one-time node enrollment tokens and outbound agent heartbeat with CPU/RAM/OS capacity metadata
+- [x] Durable leased task queue with per-node bearer authentication, lease expiry/retry and result acknowledgement
+- [x] Customer project creation API and Mini App form with plan project-count/runtime checks and automatic healthy-VPS assignment
+- [x] VPS agent outbound task polling and constrained container create action; new projects receive an isolated placeholder container
 - [x] CI workflow configured to typecheck/build the Worker frontend and compile the VPS agent
 - [x] No R2 dependency; customer files/media/backups are assigned to VPS storage
 
@@ -24,11 +27,11 @@
 - [ ] Setup wizard, bot identity/profile/menu setup, webhook registration automation and permanent installer lock
 - [ ] Complete paginated 28-language picker, translation import/overrides and synchronized bot/Mini App localization
 - [ ] Full customer dashboard metrics, onboarding checklist, notifications and Telegram-native interactions
-- [ ] Project CRUD, ZIP/file uploads, path traversal and zip-bomb validation, encrypted .env management and dependency build pipeline
-- [ ] Production VPS agent command channel, signed Worker-to-agent client, mTLS/WireGuard deployment and key rotation
+- [ ] Complete project CRUD, ZIP/file uploads, path traversal and zip-bomb validation, encrypted .env management and dependency build pipeline
+- [ ] Harden task channel with idempotent execution, mTLS/WireGuard deployment, node key rotation and operational alerting
 - [ ] Harden container isolation: rootless Docker, AppArmor/seccomp profiles, egress filtering, disk quotas, image pinning/scanning and abuse detection
 - [ ] Python/Node dependency installation, build caching, logs/console streaming, metrics, health checks, crash-loop controls and resource reporting
-- [ ] VPS scheduler, capacity-aware placement, node health, live migration and failover
+- [ ] Advanced VPS scheduler with resource-aware placement, quotas, node health, live migration and failover
 - [ ] VPS-backed file manager, project backups, retention, restore, export/import and off-node replication
 - [ ] Full responsive Admin Panel with granular staff roles, permissions and complete audit logging
 - [ ] Plans editor for price, currency, duration, project count, CPU, RAM, storage, upload, file, dependency and runtime-version limits
