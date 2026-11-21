@@ -14,9 +14,9 @@ This agent is an early isolated-container execution prototype. It is not product
 ## Install
 1. Install Node.js 22+ and rootless Docker on an Ubuntu VPS.
 2. Create a dedicated project root: `sudo install -d -m 0770 -o hostpilot -g hostpilot /srv/hostpilot/projects`.
-3. Copy `.env.example` values into a protected environment file; never commit the agent secret.
+3. Copy `.env.example` values into a protected environment file; set `HOSTPILOT_AGENT_SECRET`, `CONTROL_PLANE_URL` and the one-time `NODE_TOKEN` generated when an administrator registers this VPS in HostPilot. Never commit either secret.
 4. Run `npm install`, `npm run build`, then run the compiled server under systemd.
 5. Expose it only over private networking / mTLS; do not open port 8788 publicly.
 
 ## Important limitations
-This prototype supports start/stop/restart/delete/status only. It does not yet implement ZIP extraction, build/dependency installation, file browsing, log streaming, resource reporting, container network egress filtering, cgroup disk quotas, backups or Worker-to-agent request signing. Runtime command and environment validation still require a production review. Do not accept untrusted customer workloads until the full isolation and abuse controls are implemented and tested.
+The prototype now supports provider-neutral registration through an outbound authenticated heartbeat to the HostPilot Worker. It can run on compatible Linux VPS machines from any hosting provider; the provider label is informational, not a vendor integration. It still supports start/stop/restart/delete/status only and does not yet implement Worker-to-agent job dispatch, ZIP extraction, build/dependency installation, file browsing, log streaming, disk quotas, backups, or production egress filtering. Runtime command and environment validation still require a production review. Do not accept untrusted customer workloads until full isolation and abuse controls are implemented and tested.
