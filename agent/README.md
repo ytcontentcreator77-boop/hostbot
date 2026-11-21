@@ -21,7 +21,7 @@ This agent is an early isolated-container execution prototype. It is not product
 1. On each VPS, install Node.js 22+ and rootless Docker using the official instructions for that Linux distribution. Repeat on every machine you want to attach; the provider does not matter.
 2. Create a dedicated project root: `sudo install -d -m 0770 -o hostpilot -g hostpilot /srv/hostpilot/projects`.
 3. Copy `.env.example` values into a protected environment file; set `HOSTPILOT_AGENT_SECRET`, `CONTROL_PLANE_URL` and the one-time `NODE_TOKEN` generated when an administrator registers this VPS in HostPilot. Never commit either secret.
-4. Optionally set `GITHUB_TOKEN` in the protected agent environment. It must be a GitHub token with write access to the selected backup repository and read access for restore. Never add it to the Worker, Mini App, task payloads, or source control.
+4. Optionally set `GITHUB_TOKEN` in the protected agent environment. Set both `GITHUB_TOKEN` and `GITHUB_BACKUP_REPOSITORY=owner/repository`. The repository must already exist; the token needs write access to that dedicated repository. HostPilot enforces one configured repository and a separate project-specific branch for each workload. Never add it to the Worker, Mini App, task payloads, or source control.
 5. Run `npm install`, `npm run build`, then run the compiled server under systemd.
 6. Expose it only over private networking / mTLS; do not open port 8788 publicly.
 
