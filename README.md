@@ -8,6 +8,8 @@ Telegram-based Python and Node.js cloud hosting control plane.
 - Ubuntu VPS nodes: isolated Python/Node.js containers and all customer project files, media and backups.
 - GitHub Actions: control-plane and VPS-agent validation.
 
+**Supported billing currencies: USD ($) and INR (₹) only. USDT and other cryptocurrencies are not supported.** Each user has separate USD and INR wallet balances; no automatic conversion occurs.
+
 **No Cloudflare R2 is used.** No HTML/static-site hosting or SMM features are included.
 
 ## Current development status
